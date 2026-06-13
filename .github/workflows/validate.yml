@@ -1,0 +1,36 @@
+name: Build and Code Validation
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  validate:
+    name: Lint, Syntax & Test Validation
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirement.txt
+        pip install pytest pytest-mock
+
+    - name: Python Syntax Compilation Check
+      run: |
+        python -m py_compile agent.py prompts.py launcher.py pc_client.py device_server.py
+
+    - name: Run Pytest
+      run: |
+        pytest

@@ -1,0 +1,59 @@
+# Core LiveKit / AI assistant runtime
+livekit
+livekit-agents
+livekit-plugins-google
+livekit-plugins-noise-cancellation
+livekit-plugins-openai
+livekit-plugins-silero
+google-genai
+google-generativeai
+mem0ai
+langchain
+langchain-community
+
+# Environment, search, HTTP, and translation utilities
+python-dotenv
+requests
+duckduckgo-search
+dateparser
+deep-translator
+
+# Web / device ecosystem server
+fastapi
+uvicorn
+pydantic
+python-multipart
+websockets
+websocket-client
+pyngrok
+qrcode
+
+# Windows desktop automation, audio, and system control
+pywin32
+comtypes
+pycaw
+screen-brightness-control
+PyAutoGUI
+PyGetWindow
+pyperclip
+psutil
+sounddevice
+
+# Vision and reports
+pillow
+matplotlib
+numpy
+pandas
+
+# Fuzzy matching
+fuzzywuzzy
+python-Levenshtein
+
+# Mobile GUI client
+kivy
+plyer
+
+# Android-only note:
+# android_client.py imports androidhelper on Android devices. It is usually
+# provided by SL4A/QPython/Pydroid-style Android runtimes, not by a normal
+# Windows pip install.

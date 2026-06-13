@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Jarvis Node</title>
+    <style>
+        body {
+            background-color: #000;
+            color: #00ffcc;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        #status-ring {
+            width: 150px;
+            height: 150px;
+            border: 5px solid #333;
+            border-top: 5px solid #00ffcc;
+            border-radius: 50%;
+            animation: spin 2s linear infinite;
+            margin-bottom: 20px;
+            box-shadow: 0 0 20px #00ffccaa;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        #status-text {
+            font-size: 1.5rem;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+
+        #info {
+            margin-top: 10px;
+            color: #888;
+            font-size: 0.8rem;
+        }
+
+        .connected {
+            border-color: #00ffcc !important;
+            animation: pulse 2s infinite !important;
+            border-top: 5px solid #00ffcc !important;
+        }
+
+        .disconnected {
+            border-top: 5px solid #ff0000 !important;
+            box-shadow: 0 0 20px #ff0000aa !important;
+            color: #ff0000;
+        }
+
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 20px #00ffcc55;
+            }
+
+            50% {
+                box-shadow: 0 0 40px #00ffccaa;
+            }
+
+            100% {
+                box-shadow: 0 0 20px #00ffcc55;
+            }
+        }
+
+        button {
+            margin-top: 30px;
+            padding: 10px 20px;
+            background: #111;
+            border: 1px solid #00ffcc;
+            color: #00ffcc;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        button:active {
+            background: #00ffcc;
+            color: #000;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="status-ring"></div>
+    <div id="status-text">Connecting...</div>
+    <div id="info">Initializing Neural Link</div>
+
+    <button onclick="testVibrate()">Test Haptic</button>
+
+    <div style="margin-top: 30px; border-top: 1px solid #333; padding-top: 20px; text-align: center;">
+        <input type="file" id="fileInput" style="display: none;" onchange="uploadFile()">
+        <button onclick="document.getElementById('fileInput').click()" style="border-color: #0088ff; color: #0088ff;">📤
+            Upload File</button>
+        <div id="upload-status" style="margin-top: 10px; color: #888; font-size: 0.8rem;"></div>
+    </div>
+
+    <script>
+        const DEVICE_ID = "mobile_" + Math.random().toString(36).substr(2, 9);
+        // FIX: Auto-detect WSS for HTTPS (Ngrok) vs WS for HTTP (Local)
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const WS_URL = protocol + "//" + window.location.host + "/ws/" + DEVICE_ID;
+
+        let ws;
+        const statusText = document.getElementById('status-text');
+        const statusRing = document.getElementById('status-ring');
+        const infoText = document.getElementById('info');
+
+        function connect() {
+            ws = new WebSocket(WS_URL);
+
+            ws.onopen = () => {
+                statusText.innerText = "ONLINE";
+                statusText.classList.remove("disconnected");
+                statusRing.classList.add("connected");
+                infoText.innerText = "ID: " + DEVICE_ID;
+
+                // Register
+                const regMsg = {
+                    type: "register",
+                    device_id: DEVICE_ID,
+                    name: "Mobile Web Node",
+                    device_type: "mobile",
+                    capabilities: ["vibrate", "popup", "notification"],
+                    battery: 100,
+                    os: navigator.userAgent
+                };
+                ws.send(JSON.stringify(regMsg));
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                console.log("Received:", data);
+
+                if (data.type === "command") {
+                    handleCommand(data);
+                }
+            };
+
+            ws.onclose = () => {
+                statusText.innerText = "OFFLINE";
+                statusRing.classList.remove("connected");
+                statusText.classList.add("disconnected");
+                infoText.innerText = "Reconnecting in 2s...";
+                setTimeout(connect, 2000); // Auto Reconnect
+            };
+        }
+
+        function handleCommand(data) {
+            const action = data.action;
+            const params = data.params || {};
+            const cmdId = data.command_id;
+
+            let output = "Executed";
+            let status = "success";
+
+            try {
+                if (action === "vibrate") {
+                    if (navigator.vibrate) {
+                        navigator.vibrate(params.duration || 500);
+                        output = "Vibrated device";
+                    } else {
+                        output = "Vibration not supported";
+                    }
+                } else if (action === "popup" || action === "toast") {
+                    alert("JARVIS: " + (params.text || "Alert"));
+                    output = "Popup shown";
+                }
+            } catch (e) {
+                status = "error";
+                output = e.message;
+            }
+
+            // Send Result
+            ws.send(JSON.stringify({
+                type: "result",
+                command_id: cmdId,
+                status: status,
+                output: output
+            }));
+        }
+
+        function testVibrate() {
+            if (navigator.vibrate) navigator.vibrate(200);
+            else alert("Vibrate not supported on this device/browser");
+        }
+
+        // Prevent sleep (Wake Lock)
+        async function requestWakeLock() {
+            try {
+                if ('wakeLock' in navigator) {
+                    await navigator.wakeLock.request('screen');
+                    console.log('Wake Lock active');
+                }
+            } catch (err) {
+                console.log(err);
+            }
+        }
+
+        async function uploadFile() {
+            const fileInput = document.getElementById('fileInput');
+            const status = document.getElementById('upload-status');
+            if (fileInput.files.length === 0) return;
+
+            const file = fileInput.files[0];
+            const formData = new FormData();
+            formData.append("file", file);
+
+            status.innerText = "Uploading " + file.name + "...";
+
+            try {
+                const protocol = window.location.protocol;
+                const uploadUrl = protocol + "//" + window.location.host + "/upload";
+
+                const response = await fetch(uploadUrl, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                if (response.ok) {
+                    status.innerText = "✅ Upload Compete";
+                    // Notify Brain a file was uploaded (optional, for advanced flows)
+                } else {
+                    status.innerText = "❌ Error: " + (result.error || "Unknown");
+                }
+            } catch (e) {
+                status.innerText = "❌ Network Error";
+                console.error(e);
+            }
+        }
+
+        connect();
+        document.onclick = requestWakeLock; // Request on first user interaction
+    </script>
+
+</body>
+
+</html>
