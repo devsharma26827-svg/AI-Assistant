@@ -4,6 +4,7 @@ import pyautogui
 import pyperclip
 import re
 from livekit.agents import function_tool
+from typing_utils import human_like_type
 
 # Configure logging
 logger = logging.getLogger("whatsapp_tools")
@@ -29,9 +30,27 @@ def _clean_text(text: str) -> str:
     # Remove non-ascii
     return re.sub(r'[^\x00-\x7F]+', '', text).strip()
 
+def _guard_failsafe():
+    """
+    PyAutoGUI aborts every action if the mouse is parked in a screen corner.
+    That is a useful manual kill-switch, but it also killed a legitimate
+    WhatsApp send mid-flight. Nudge the cursor out of the corner first so
+    keyboard-only automation isn't blocked by where the mouse happens to sit.
+    """
+    try:
+        width, height = pyautogui.size()
+        x, y = pyautogui.position()
+        margin = 5
+        if x <= margin or y <= margin or x >= width - margin or y >= height - margin:
+            pyautogui.moveTo(width // 2, height // 2, duration=0.1)
+    except Exception as e:
+        logger.debug(f"failsafe guard skipped: {e}")
+
+
 def _focus_whatsapp():
     """Activates the WhatsApp window."""
     try:
+        _guard_failsafe()
         pyautogui.press('win')
         time.sleep(WAIT_SHORT)
         pyautogui.write('WhatsApp')
@@ -62,7 +81,8 @@ def _search_and_open_chat(contact_name: str) -> bool:
             return False
 
         logger.info(f"Searching for contact: {contact_name}")
-        
+
+        _guard_failsafe()
         # 1. Open Search
         _reset_state()
         pyautogui.hotkey('ctrl', 'f')
@@ -119,8 +139,9 @@ def _whatsapp_message_impl(contact: str, message: str) -> str:
             return f"❌ Could not find chat for: {contact} (Ensure name is English/Exact)."
             
         # 3. Send Message
-        pyperclip.copy(message)
-        pyautogui.hotkey('ctrl', 'v')
+        # Short messages are typed out (looks like a real assistant at work);
+        # long messages are pasted instantly instead of slowly typed out.
+        human_like_type(message)
         time.sleep(WAIT_SHORT)
         pyautogui.press('enter')
         
@@ -129,155 +150,3 @@ def _whatsapp_message_impl(contact: str, message: str) -> str:
         
     except Exception as e:
         return f"❌ Message failed: {str(e)}"
-
-@function_tool
-async def whatsapp_file(contact: str, file_path: str) -> str:
-    """
-    Sends a file. Strict ASCII enforcement for contact name.
-    """
-    import os
-    import subprocess
-    
-    try:
-        if not os.path.exists(file_path):
-            return f"❌ File not found: {file_path}"
-            
-        if not _is_valid_ascii(contact):
-             return f"❌ Validation Error: Contact name '{contact}' contains non-English characters."
-
-        if not _focus_whatsapp():
-             return "❌ Failed to focus WhatsApp."
-             
-        if not _search_and_open_chat(contact):
-            return f"❌ Could not open chat for: {contact}"
-            
-        # Copy file to clipboard (PowerShell)
-        cmd = f"Set-Clipboard -Path '{file_path}'"
-        subprocess.run(["powershell", "-Command", cmd], check=True)
-        time.sleep(WAIT_SHORT)
-        
-        # Paste and Send
-        pyautogui.hotkey('ctrl', 'v')
-        time.sleep(WAIT_MEDIUM) 
-        pyautogui.press('enter') 
-        time.sleep(WAIT_MEDIUM)
-        
-        return f"✅ Sent file to {contact}: {os.path.basename(file_path)}"
-        
-    except Exception as e:
-        return f"❌ File send failed: {str(e)}"
-
-@function_tool
-async def read_last_message(contact: str = None) -> str:
-    """
-    Reads the last message.
-    """
-    import asyncio
-    import json
-    
-    try:
-        await asyncio.sleep(0.1)  # allow event loop
-
-        # Call the synchronous implementation
-        msg = _read_message_impl(contact)
-
-        if not msg or "Error" in msg or "Failed" in msg:
-             return json.dumps({
-                "status": "error",
-                "message": msg if msg else "Unknown error"
-            })
-
-        return json.dumps({
-            "status": "success",
-            "message": str(msg)
-        })
-
-    except Exception as e:
-        return json.dumps({
-            "status": "error",
-            "message": str(e)
-        })
-
-def _read_message_impl(contact: str = None) -> str:
-    """
-    Internal synchronous implementation of reading logic.
-    """
-    try:
-        print("[DEBUG] Starting _read_message_impl...")
-        if not _focus_whatsapp(): return "❌ Failed to focus WhatsApp."
-        
-        # Maximize
-        pyautogui.hotkey('win', 'up')
-        time.sleep(0.5)
-        pyautogui.press('esc') # Clear dialogs
-        time.sleep(0.5)
-
-        if contact:
-            print(f"[DEBUG] Searching for: {contact}")
-            if not _search_and_open_chat(contact):
-                 return f"❌ Could not find chat for: {contact}"
-        
-        # 2. Focus Chat History
-        screen_w, screen_h = pyautogui.size()
-        
-        # Click DEEP into the right side
-        click_x = screen_w - 200
-        click_y = screen_h * 0.5
-        
-        print(f"[DEBUG] Clicking at: {click_x}, {click_y}")
-        pyautogui.moveTo(click_x, click_y)
-        time.sleep(0.2)
-        pyautogui.click()
-        time.sleep(WAIT_SHORT)
-        
-        # 3. Copy Sequence
-        print("[DEBUG] Selecting & Copying...")
-        try:
-            pyperclip.copy("") # Clear
-        except: pass
-        
-        pyautogui.hotkey('ctrl', 'a')
-        time.sleep(0.5)
-        pyautogui.hotkey('ctrl', 'c')
-        time.sleep(1.0) 
-
-        chat_text = pyperclip.paste()
-        print(f"[DEBUG] Clipboard length: {len(chat_text) if chat_text else 0}")
-        
-        if not chat_text:
-            return "⚠️ Clipboard is empty. Selection failed."
-            
-        # 4. Clean & Parse
-        safe_text = str(chat_text).encode('ascii', errors='ignore').decode('ascii')
-        lines = [line.strip() for line in safe_text.splitlines() if line.strip()]
-        
-        if not lines: return "⚠️ Chat text appears empty/unreadable."
-             
-        # Extract last few lines
-        relevant_lines = lines[-12:]
-        return "📄 Last Messages:\n" + "\n".join(relevant_lines)
-
-    except BaseException as e:
-        import traceback
-        tb = traceback.format_exc()
-        print(f"[ERROR] CRITICAL READ FAILURE: {tb}")
-        return f"❌ System Error reading chat: {str(e)}"
-
-@function_tool
-async def whatsapp_call(contact: str, video: bool = False) -> str:
-    """Initiates call (Placeholder)."""
-    return "⚠️ Calling capability is currently manual only."
-
-@function_tool
-async def whatsapp_reply(message: str) -> str:
-    """Replies to current chat."""
-    try:
-        if not _focus_whatsapp(): return "❌ Focus failed."
-        
-        pyperclip.copy(message)
-        pyautogui.hotkey('ctrl', 'v')
-        time.sleep(WAIT_SHORT)
-        pyautogui.press('enter')
-        return "✅ Replied to active chat."
-    except Exception as e:
-        return f"❌ Reply failed: {str(e)}"

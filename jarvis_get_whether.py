@@ -1,4 +1,5 @@
 import os
+import asyncio
 import requests
 import logging
 from dotenv import load_dotenv
@@ -13,10 +14,14 @@ logger = logging.getLogger(__name__)
 
 async def get_current_city():
     try:
-        response = requests.get("https://ipinfo.io", timeout=5)
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None, lambda: requests.get("https://ipinfo.io", timeout=5)
+        )
         data = response.json()
         return data.get("city", "Unknown")
     except Exception as e:
+        logger.warning(f"get_current_city failed: {e}")
         return "Unknown"
 
 @function_tool
@@ -43,7 +48,7 @@ async def get_weather(city: str = "") -> str:
         return "Environment variables में OpenWeather API key नहीं मिली।"
 
     if not city:
-        city = get_current_city()
+        city = await get_current_city()
 
     logger.info(f"City के लिए weather fetch किया जा रहा है।: {city}")
     url = "https://api.openweathermap.org/data/2.5/weather"
@@ -54,7 +59,10 @@ async def get_weather(city: str = "") -> str:
     }
 
     try:
-        response = requests.get(url, params=params)
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None, lambda: requests.get(url, params=params, timeout=10)
+        )
         if response.status_code != 200:
             logger.error(f"OpenWeather API में error आया।: {response.status_code} - {response.text}")
             return f"Error: {city} के लिए weather fetch नहीं कर पाए। कृपया city name चेक करें।"

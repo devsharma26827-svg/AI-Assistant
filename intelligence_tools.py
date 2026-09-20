@@ -137,7 +137,8 @@ async def set_communication_style(style: str) -> str:
     Use this when user says "Be direct", "Be supportive", "Normal mode", etc.
     
     Arguments:
-    - style: 'direct' (short, no fluff), 'supportive' (encouraging), 'neutral' (default), 'formal'.
+    - style: 'direct' (short, no fluff), 'supportive' (encouraging), 'casual' (relaxed, friendly),
+      'neutral' (default), 'formal', or 'adaptable'.
     """
     try:
         loop = asyncio.get_running_loop()
@@ -148,7 +149,7 @@ async def set_communication_style(style: str) -> str:
 def _set_communication_style_impl(style: str) -> str:
     with _memory_lock:
         style = style.lower()
-        valid_styles = ["direct", "supportive", "neutral", "formal", "adaptable"]
+        valid_styles = ["direct", "supportive", "casual", "friendly", "neutral", "formal", "adaptable"]
         if style not in valid_styles:
             style = "adaptable"
             

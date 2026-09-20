@@ -45,9 +45,35 @@ class GeminiKeyManager:
             self.api_keys = [""]
             
         self.current_index = 0
+        # key -> unix timestamp until which that key should be skipped because
+        # it recently returned a 429/quota error.
+        self._key_cooldowns = {}
 
     def get_current_key(self) -> str:
         return self.api_keys[self.current_index]
+
+    def _all_keys_cooling_down(self, now: float) -> bool:
+        if not self._key_cooldowns:
+            return False
+        return all(self._key_cooldowns.get(k, 0) > now for k in self.api_keys)
+
+    @staticmethod
+    def _parse_retry_delay(error_text: str, default: float = 30.0) -> float:
+        """Pulls Google's suggested retry delay out of a 429 message."""
+        import re
+        m = re.search(r"retry in ([\d.]+)s", error_text, re.IGNORECASE)
+        if m:
+            try:
+                return min(300.0, max(5.0, float(m.group(1))))
+            except ValueError:
+                pass
+        m = re.search(r"seconds:\s*(\d+)", error_text)
+        if m:
+            try:
+                return min(300.0, max(5.0, float(m.group(1))))
+            except ValueError:
+                pass
+        return default
         
     def _rotate_key(self):
         old_key = self.api_keys[self.current_index]
@@ -68,13 +94,28 @@ class GeminiKeyManager:
                 "gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"
             ]
             
-        time.sleep(2)
         total_keys = len(self.api_keys)
         attempts = 0
         max_total_attempts = total_keys * (max_retries_per_key + 1)
-        
+
+        # If every key is already known to be rate-limited, fail fast instead of
+        # cycling through them again — retrying a quota-exhausted key burns more
+        # quota and produced the long rotation storms seen in testing.
+        now = time.time()
+        if self._all_keys_cooling_down(now):
+            wait_s = int(max(0, min(self._key_cooldowns.values()) - now))
+            raise Exception(
+                f"All Gemini API keys are rate-limited right now. Try again in ~{wait_s}s."
+            )
+
         while attempts < max_total_attempts:
             current_key = self.get_current_key()
+
+            # Skip a key that recently returned a rate-limit error.
+            if self._key_cooldowns.get(current_key, 0) > time.time():
+                self._rotate_key()
+                attempts += 1
+                continue
             
             # Try all models for the given key before rotating the key
             for model_index, model_name in enumerate(fallback_models):
@@ -99,11 +140,19 @@ class GeminiKeyManager:
                     # 2. Check Rate Limit / Quota
                     is_rate_limit = any(term in error_msg for term in ["429", "quota", "exhausted", "too many requests", "deadline", "503", "504", "overloaded"])
                     
-                    if is_rate_limit and total_keys > 1:
-                        logger.warning(f"Rate limit hit on key {current_key[-4:]}: {e}. Rotating keys...")
-                        self._rotate_key()
+                    if is_rate_limit:
+                        # Park this key for a cooldown window so parallel/later
+                        # calls don't immediately hammer it again.
+                        self._key_cooldowns[current_key] = time.time() + self._parse_retry_delay(str(e))
+                        logger.warning(f"Rate limit hit on key {current_key[-4:]}. Parking it and rotating...")
+
+                        if self._all_keys_cooling_down(time.time()):
+                            raise Exception(
+                                "All Gemini API keys are rate-limited right now. Try again shortly."
+                            )
+                        if total_keys > 1:
+                            self._rotate_key()
                         attempts += 1
-                        time.sleep(1)
                         break # Break inner model loop to restart outer key loop with new key
                     
                     # 3. Hard Errors

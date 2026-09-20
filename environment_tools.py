@@ -12,20 +12,34 @@ memory = MemoryStore()
 
 # --- Volume Control (PyCAW) ---
 try:
-    from comtypes import CLSCTX_ALL
+    from comtypes import CLSCTX_ALL, CoInitialize, CoUninitialize
     from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
     import math
 
     def _set_volume(level_percent: int):
-        devices = AudioUtilities.GetSpeakers()
-        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-        volume = interface.QueryInterface(IAudioEndpointVolume)
-        
-        # PyCAW uses dB, but we want scalar 0.0 to 1.0 mapped to percent
-        # Actually SetMasterVolumeLevelScalar is easier: 0.0 to 1.0
-        scalar = max(0.0, min(1.0, level_percent / 100.0))
-        volume.SetMasterVolumeLevelScalar(scalar, None)
-        return True
+        # PyCAW talks to Windows audio over COM. When this runs on a worker
+        # thread (asyncio.to_thread / run_in_executor) that thread has no COM
+        # apartment initialised, and every call fails with a COM error — this
+        # is why volume control failed while brightness (no COM) worked.
+        # Initialise COM for this thread, and always uninitialise afterwards.
+        CoInitialize()
+        try:
+            speakers = AudioUtilities.GetSpeakers()
+            # Newer pycaw returns an AudioDevice wrapper (no .Activate); older
+            # versions return the raw IMMDevice pointer. Support both.
+            dev = speakers if hasattr(speakers, "Activate") else getattr(speakers, "_dev", speakers)
+            interface = dev.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+            volume = interface.QueryInterface(IAudioEndpointVolume)
+
+            # SetMasterVolumeLevelScalar takes 0.0 - 1.0
+            scalar = max(0.0, min(1.0, level_percent / 100.0))
+            volume.SetMasterVolumeLevelScalar(scalar, None)
+            return True
+        finally:
+            try:
+                CoUninitialize()
+            except Exception:
+                pass
 except ImportError:
     logger.error("PyCAW not found. Volume control will fail.")
     def _set_volume(level_percent: int):
@@ -49,6 +63,7 @@ async def set_system_volume(level: int) -> str:
         else:
             return "❌ Volume control failed (Dependency missing?)."
     except Exception as e:
+        logger.error(f"set_system_volume failed: {e}")
         return f"❌ Error setting volume: {e}"
 
 @function_tool
@@ -82,7 +97,7 @@ async def activate_mode(mode_name: str) -> str:
     actions_taken = []
     
     # 3. Apply Settings (Wrap blocking calls)
-    async def apply_settings():
+    def apply_settings():
         if not prefs:
             if mode_name == "focus":
                 _set_volume(0)
@@ -107,7 +122,8 @@ async def activate_mode(mode_name: str) -> str:
                 try:
                     sbc.set_brightness(prefs["brightness"])
                     actions_taken.append(f"Brightness {prefs['brightness']}%")
-                except: pass
+                except Exception as e:
+                    logger.warning(f"activate_mode: brightness change failed: {e}")
                 
     await asyncio.to_thread(apply_settings)
             

@@ -1,12 +1,16 @@
 # Core LiveKit / AI assistant runtime
-livekit
-livekit-agents
-livekit-plugins-google
-livekit-plugins-noise-cancellation
-livekit-plugins-openai
-livekit-plugins-silero
-google-genai
-google-generativeai
+# Versions pinned to a known-good, mutually-compatible set (checked against
+# PyPI on 2026-09-12). Unpinned deps were the reason the assistant could
+# silently pick up a breaking release on a fresh install — bump these
+# deliberately and re-test, don't leave them floating.
+livekit==1.1.18
+livekit-agents==1.8.1
+livekit-plugins-google==1.8.1
+livekit-plugins-noise-cancellation==0.3.0
+livekit-plugins-openai==1.8.1
+livekit-plugins-silero==1.8.1
+google-genai==2.23.0
+google-generativeai==0.8.6
 mem0ai
 langchain
 langchain-community
@@ -15,18 +19,10 @@ langchain-community
 python-dotenv
 requests
 duckduckgo-search
-dateparser
 deep-translator
 
-# Web / device ecosystem server
-fastapi
-uvicorn
-pydantic
-python-multipart
-websockets
+# Legacy/optional client library (unused by current tools, kept as-is)
 websocket-client
-pyngrok
-qrcode
 
 # Windows desktop automation, audio, and system control
 pywin32
@@ -39,21 +35,9 @@ pyperclip
 psutil
 sounddevice
 
-# Vision and reports
+# Vision (screen capture / analysis)
 pillow
-matplotlib
-numpy
-pandas
 
 # Fuzzy matching
 fuzzywuzzy
 python-Levenshtein
-
-# Mobile GUI client
-kivy
-plyer
-
-# Android-only note:
-# android_client.py imports androidhelper on Android devices. It is usually
-# provided by SL4A/QPython/Pydroid-style Android runtimes, not by a normal
-# Windows pip install.

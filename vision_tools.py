@@ -43,14 +43,30 @@ async def _get_gemini_vision_response(full_prompt: str, custom_image=None) -> st
     if not gemini_key_manager.api_keys or gemini_key_manager.api_keys == [""]:
         return "❌ Error: GEMINI_API_KEY not found in environment variables."
 
+    # Full-resolution screenshots (often 1920x1200+) are slow to upload and were
+    # the main cause of the repeated 20s vision timeouts. Downscale before
+    # sending — text and UI elements stay legible well below native size.
+    _MAX_VISION_EDGE = 1280
+
+    def _downscale(img):
+        try:
+            w, h = img.size
+            longest = max(w, h)
+            if longest > _MAX_VISION_EDGE:
+                ratio = _MAX_VISION_EDGE / float(longest)
+                img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+        except Exception as e:
+            logger.debug(f"vision downscale skipped: {e}")
+        return img
+
     def _capture_screen():
         if custom_image is not None:
-             return custom_image
+             return _downscale(custom_image)
         screenshot = ImageGrab.grab()
         img_byte_arr = io.BytesIO()
         screenshot.save(img_byte_arr, format='PNG')
         img_byte_arr.seek(0)
-        return Image.open(img_byte_arr)
+        return _downscale(Image.open(img_byte_arr))
 
     def _analyze_image(img, prompt):
         def _api_call(active_key, model_name):
@@ -63,8 +79,17 @@ async def _get_gemini_vision_response(full_prompt: str, custom_image=None) -> st
     try:
         loop = asyncio.get_running_loop()
         image = await loop.run_in_executor(None, _capture_screen)
-        response_text = await loop.run_in_executor(None, _analyze_image, image, full_prompt)
+        # Hard cap so a slow/rate-limited Gemini call can never hang the
+        # conversation for a minute+ — better to fail fast and let the
+        # assistant say so than to silently block for 90+ seconds.
+        response_text = await asyncio.wait_for(
+            loop.run_in_executor(None, _analyze_image, image, full_prompt),
+            timeout=35,
+        )
         return response_text
+    except asyncio.TimeoutError:
+        logger.error("Vision analysis timed out after 35s")
+        return "❌ Vision check timed out — Gemini took too long to respond. Try again in a moment."
     except Exception as e:
         logger.error(f"Vision analysis failed: {e}")
         return f"❌ Failed to analyze screen: {str(e)}"

@@ -1,12 +1,12 @@
-# Cynthia: Distributed Personal AI Assistant
+# Cynthia: Local Personal AI Assistant
 
-Cynthia is a professional, production-grade, low-latency, real-time voice-driven AI assistant. Built upon LiveKit's WebRTC agent framework and powered by Google's Gemini Realtime API, Cynthia acts as a centralized "Master Brain" capable of executing system tasks, orchestrating dynamic memory, and controlling an ecosystem of distributed client devices (PCs, tablets, mobiles) over WebSockets.
+Cynthia is a low-latency, real-time voice-driven AI assistant for your Windows laptop/PC. Built upon LiveKit's WebRTC agent framework and powered by Google's Gemini Realtime API, Cynthia controls your local machine, remembers context about you, and helps you get things done by voice or text.
 
 ---
 
 ## Overview
 
-Cynthia combines high-speed vocal interaction with rich local and remote device capabilities. She inherits the tool-based capabilities of legacy technical assistants while maintaining a warm, responsive, and calm female persona. Whether communicating via Hinglish or English, Cynthia remembers details, learns user habits, schedules tasks, writes code, manages files, and interfaces directly with your Windows OS and external APIs.
+Cynthia combines high-speed vocal interaction with local system control. She inherits the tool-based capabilities of legacy technical assistants while maintaining a warm, responsive, and calm female persona. Whether communicating via Hinglish or English, Cynthia remembers details, learns user habits, writes text/code, manages files, and interfaces directly with your Windows OS and external APIs.
 
 ---
 
@@ -14,31 +14,31 @@ Cynthia combines high-speed vocal interaction with rich local and remote device 
 
 * **Real-Time Vocal Interaction**: Sub-second voice response time using LiveKit WebRTC channels and Gemini's Realtime Beta.
 * **Smart Key & Model Rotation**: Transparently manages multiple Gemini API keys and automatically rotates them upon encountering rate limits (429/quota errors) or model incompatibilities.
-* **Distributed Device Ecosystem**: Coordinates remote commands across registered clients (such as PCs and Kivy-powered Android devices) using a FastAPI WebSocket registry.
-* **Persistent Dynamic Memory**: Structured, file-based memory store (`memory.json`) tracking user profiles, life phases, hobbies, habits, tasks, projects, and emotional states.
-* **Deep Windows System Control**: Adjusts volume and screen brightness, arranges desktop windows, captures screenshots, and opens/closes applications visually or via keyboard shortcuts.
-* **Integrations & Automation**: WhatsApp messaging/calling, OpenWeatherMap integration, SerpAPI Google Search, file-based document translation, and automated workflow triggers.
+* **Persistent Dynamic Memory**: Structured, file-based memory store (`memory.json`) tracking user profiles, life phases, hobbies, habits, projects, and emotional states.
+* **Deep Windows System Control**: Adjusts volume and screen brightness, arranges desktop windows, captures screenshots, opens/closes applications, and creates/finds files and folders.
+* **Screen Understanding / Vision**: Reads and explains what's on screen, locates UI elements, and detects error popups using Gemini Vision.
+* **Human-Like Computer Control**: Clicks, types, and navigates GUI apps using vision-guided, keyboard-first automation.
+* **Content Writing**: Dictates and types text or starter code directly into an editor.
+* **WhatsApp Text Messaging**: Sends a WhatsApp text message to a named contact (desktop app automation). File sharing, reading messages, replying, and calling are not supported.
+* **Smart Reply Suggestions**: Can generate suggested Hinglish reply options and a safety-level recommendation for a given incoming message — these are suggestions only; Cynthia does not send them automatically.
+* **Integrations & Automation**: OpenWeatherMap integration, SerpAPI Google Search, file-based document translation, lightweight task/project tracking, and user-defined workflow triggers.
 
 ---
 
 ## Architecture Overview
 
-Cynthia operates on a Hub-and-Spoke model where your laptop serves as the **Master Brain**:
+Cynthia runs entirely on your local machine:
 
 ```mermaid
 graph TD
     A[User Voice/Text] -->|WebRTC / Console| B[Cynthia Master Agent]
     B -->|Tool Execution| C[Local OS Control / APIs]
-    B -->|HTTP Commands| D[Ecosystem Brain Server]
-    D -->|WebSockets| E[PC Client]
-    D -->|WebSockets| F[Android Client]
-    B -->|Read/Write| G[File Memory Store]
+    B -->|Read/Write| D[File Memory Store]
 ```
 
 1. **Master Agent (`agent.py`)**: Connects to LiveKit RTC rooms and streams microphone audio to Gemini's Realtime model.
-2. **Brain Server (`device_server.py`)**: A central FastAPI HTTP and WebSocket server broker registering and routing commands to remote devices.
-3. **Ecosystem Clients (`pc_client.py` & `android_client.py`)**: Remote client scripts running on separate physical hardware that execute shell tasks, trigger web browser navigation, or fetch device status.
-4. **Memory Store (`memory_store.py`)**: The database controller managing local JSON files.
+2. **Memory Store (`memory_store.py`)**: The database controller managing local JSON files.
+3. **Tool modules** (root-level `*_tools.py` files): System control, file management, WhatsApp messaging, vision, translation, content writing, etc.
 
 ---
 
@@ -47,11 +47,10 @@ graph TD
 * **Core Runtime**: Python 3.11
 * **Vocal RTC**: `livekit` & `livekit-agents`
 * **Large Language Model**: `google-genai` (Gemini API)
-* **Web Framework & Broker**: `fastapi`, `uvicorn`, `websockets`
 * **Desktop Automation**: `pywin32`, `pycaw`, `screen-brightness-control`, `PyAutoGUI`, `PyGetWindow`, `psutil`
-* **Visual Reports**: `pillow`, `matplotlib`, `pandas`, `numpy`
-* **Mobile GUI**: `kivy`, `plyer`
-* **Development & Tunneling**: `python-dotenv`, `pyngrok`, `qrcode`
+* **Vision**: `pillow`, `google-generativeai`
+* **Translation**: `deep-translator`
+* **Search**: SerpAPI (`requests`-based)
 
 ---
 
@@ -60,31 +59,19 @@ graph TD
 ```
 .
 ├── .github/                   # GitHub Action workflows and issue templates
-├── config/                    # Compiled internal configurations
-├── docs/                      # Markdown system manuals and designs
-├── document_qa/               # Document parsing engine
-├── document_understanding/    # Advanced text understanding modules
-├── examples/                  # Reference examples and starter workflows
-├── public/                    # Static UI resources
-├── rag_module/                # RAG (Retrieval-Augmented Generation) code
-├── scripts/                   # Auxiliary dev and deployment scripts
-├── services/                  # Refactored business logic modules
-├── src/                       # Replica of core executable files
-├── templates/                 # HTML UI layouts for device management
-├── tests/                     # Test harness, configurations, and test suites
+├── services/                  # Older parallel copies of some tool modules (not imported by agent.py)
+├── src/                       # Older parallel copies of core executable files (not imported by agent.py)
+├── tests/                     # Test harness, configuration, and test suites
 ├── utils/                     # Reusable utilities (e.g. system control wrappers)
-├── visualizations/            # Output directory for generated charts
-├── voice_data/                # Synthetic speech wav templates
 ├── agent.py                   # Main LiveKit Voice Agent entrypoint
-├── device_server.py           # FastAPI Web & WebSocket Brain Server
 ├── gemini_key_manager.py      # Gemini API key and model rotation manager
-├── launcher.py                # Ecosystem bootstrap and Ngrok QR-code engine
 ├── memory_store.py            # Local JSON memory database driver
-├── pc_client.py               # Local background PC executor client
 ├── prompts.py                 # Core system prompts & personality templates
 ├── requirement.txt            # Python dependencies list
-└── run_*.bat                  # Batch files for Windows launchers
+└── run_assistant_*.bat        # Batch files for Windows launchers
 ```
+
+Note: `services/` and `src/` contain earlier, parallel copies of some tool files that `agent.py` does not import at runtime. They are kept around intentionally rather than deleted outright; only files confirmed to be 100%-identical duplicates of a root file have been removed from them.
 
 ---
 
@@ -118,16 +105,13 @@ graph TD
    ```
 
 4. **Environment Variables**:
-   Copy `.env.example` to `.env` and fill in your API credentials:
-   ```bash
-   copy .env.example .env
-   ```
+   Copy `.env.local.example` to `.env.local` and fill in your API credentials.
 
 ---
 
 ## Environment Variables
 
-Key parameters in `.env` (or `.env.local`):
+Key parameters in `.env.local`:
 
 | Variable Name | Description | Default / Example |
 | ------------- | ----------- | ----------------- |
@@ -135,6 +119,8 @@ Key parameters in `.env` (or `.env.local`):
 | `ASSISTANT_VOICE` | The voice profile used by LiveKit | `Aoede` |
 | `PLAY_STARTUP_SOUND` | Enable/disable non-blocking Windows startup chime | `false` |
 | `GEMINI_API_KEYS` | Comma-separated API keys for rotation | `key1,key2` |
+| `GEMINI_LIVE_MODEL` | Gemini Live model to pin (Google retires old ones periodically) | `gemini-3.1-flash-live-preview` |
+| `TOOL_MODE` | `core` (default, faster) or `full` (also loads vision/workflow tools) | `core` |
 | `SERPAPI_API_KEY` | Key for Web Search capabilities | `your_serpapi_key` |
 | `OPENWEATHER_API_KEY`| Key for Weather status updates | `your_weather_key` |
 | `LIVEKIT_URL` | LiveKit cloud instance URL | `wss://...` |
@@ -145,8 +131,6 @@ Key parameters in `.env` (or `.env.local`):
 
 ## Running the Project
 
-### 1. Launch the Assistant Voice Channel
-
 Run the assistant in live audio stream mode:
 ```bash
 run_assistant_console.bat
@@ -155,29 +139,6 @@ Alternatively, for text-only terminal debugging:
 ```bash
 run_assistant_text.bat
 ```
-
-### 2. Run the Multi-Device Ecosystem
-
-Run the entire ecosystem, which spawns the Brain Server, starts the local PC client, tunnels the connection via Ngrok, and prints connection QR codes for remote mobile clients:
-```bash
-run_ecosystem.bat
-```
-*(Or manually run `python launcher.py` in your terminal).*
-
----
-
-## API Overview (Brain Server)
-
-The FastAPI server (`device_server.py`) exposes several endpoints:
-
-* **WebSocket Channel**: `WS /ws/{device_id}`
-  Handles bidirectional registry notifications, keep-alive heartbeats, and commands.
-* **Web UI Dashboard**: `GET /mobile`
-  HTML-based device management and control interface.
-* **Execute Command**: `POST /send_command`
-  Dispatch target actions to specific devices.
-* **Broadcast**: `POST /broadcast`
-  Emit command events to all connected clients.
 
 ---
 
@@ -191,7 +152,6 @@ Cynthia uses a custom, multi-tier JSON document schema driven by `memory_store.p
   "life_phases": { "current_phase": "Unknown", "goals": [] },
   "facts": { "hobbies": [ { "text": "Coding", "confidence": 1.0, "count": 1 } ] },
   "habits": [],
-  "schedule": [],
   "emotional_context": { "current_state": "Neutral" }
 }
 ```
@@ -202,30 +162,10 @@ Cynthia uses a custom, multi-tier JSON document schema driven by `memory_store.p
 
 ---
 
-## Deployment Guide
-
-The FastAPI server component can be deployed using Docker.
-
-### Docker Deployment
-
-1. **Build the Docker Image**:
-   ```bash
-   docker build -t cynthia-brain-server .
-   ```
-
-2. **Run via Docker Compose**:
-   Ensure ports and volumes are mapped correctly in `docker-compose.yml`, then start:
-   ```bash
-   docker-compose up -d
-   ```
-
----
-
 ## Troubleshooting
 
 * **WinError 64 (Network Name Dropped)**: This is normal when the LiveKit WebRTC connection terminates. Cynthia handles this gracefully, silently reconnecting.
 * **PortAudio / Sound Device Errors**: Ensure you have audio devices properly set up in Windows settings and that no other process is locking your microphone.
-* **Ngrok Authentication Errors**: If the remote tunnel fails to start, sign up for a free Ngrok token and run `ngrok config add-authtoken <token>` in your terminal.
 
 ---
 

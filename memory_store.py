@@ -102,15 +102,39 @@ class MemoryStore:
 
     def set_active_file(self, file_path):
         """Updates the context with the last used file path."""
+        # Re-read from disk first: other tool modules hold their own
+        # MemoryStore instance, and writing our stale copy back would clobber
+        # a newer active-file set by one of them (this is why
+        # open_current_file kept opening an older file).
+        self._refresh_file_context()
         if "file_context" not in self.memory:
             self.memory["file_context"] = {}
         
         self.memory["file_context"]["last_active_file"] = file_path
         self.memory["file_context"]["last_updated"] = datetime.now().isoformat()
         self.save_memory()
-        
+
+    def _refresh_file_context(self):
+        """Pulls the newest file_context written by any MemoryStore instance."""
+        try:
+            with open(self.filepath, "r", encoding="utf-8") as f:
+                on_disk = json.load(f)
+        except Exception as e:
+            logger.debug(f"_refresh_file_context: could not read disk copy: {e}")
+            return
+
+        disk_ctx = on_disk.get("file_context", {})
+        if not disk_ctx.get("last_active_file"):
+            return
+
+        mine = self.memory.get("file_context", {})
+        # Keep whichever copy was written most recently.
+        if disk_ctx.get("last_updated", "") >= mine.get("last_updated", ""):
+            self.memory["file_context"] = disk_ctx
+
     def get_active_file(self):
         """Retrieves the last active file path."""
+        self._refresh_file_context()
         return self.memory.get("file_context", {}).get("last_active_file")
 
     def add_fact(self, category, fact_text):
@@ -229,8 +253,8 @@ class MemoryStore:
                     
                     if habit["confidence"] < original_conf:
                          pass # Debug log could go here
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"decay_habits: skipping habit with bad 'last_used' value ({last_used_str!r}): {e}")
         self.save_memory()
 
     def forget_habit(self, trigger, action):
@@ -294,7 +318,8 @@ class MemoryStore:
                 dt = datetime.fromisoformat(i["timestamp"])
                 time_str = dt.strftime("%H:%M")
                 log_str += f"- ({time_str}) Used '{i['tool']}': {i['description']}\n"
-            except:
+            except Exception as e:
+                logger.debug(f"get_recent_interactions: skipping malformed entry {i!r}: {e}")
                 continue
         return log_str.strip()
 
@@ -404,7 +429,8 @@ class MemoryStore:
                 
                 if delta_minutes < 30: # Conflict range
                     conflicts.append(task)
-            except: 
+            except Exception as e:
+                logger.debug(f"check_conflicts: skipping task with bad 'time' value ({task.get('time')!r}): {e}")
                 continue
                 
         return conflicts
@@ -530,7 +556,8 @@ Last Active File: {self.get_active_file() or 'None'}
                      
                      context += f"- [PENDING] {day_str} {nice_time}: {task['description']} (Energy: {task.get('energy','med')})\n"
                      count += 1
-                 except: pass
+                 except Exception as e:
+                     logger.debug(f"get_formatted_context: skipping malformed task {task!r}: {e}")
         else:
             context += "(No upcoming tasks)\n"
 
@@ -742,7 +769,7 @@ Current Focus: {phases.get('current_phase', 'Unknown')} - {phases.get('descripti
         modes["last_mode"] = modes.get("active_mode", "normal")
         modes["active_mode"] = mode_name
         self.memory["environment_modes"] = modes
-        self._save()
+        self.save_memory()
 
     def get_mode_preferences(self, mode_name):
         return self.memory.get("environment_modes", {}).get("preferences", {}).get(mode_name, {})
@@ -754,7 +781,7 @@ Current Focus: {phases.get('current_phase', 'Unknown')} - {phases.get('descripti
         
         modes["preferences"][mode_name][setting] = value
         self.memory["environment_modes"] = modes
-        self._save()
+        self.save_memory()
 
     # --- BEHAVIORAL LEARNING ---
 

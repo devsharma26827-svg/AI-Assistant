@@ -3,10 +3,13 @@ import subprocess
 import logging
 import sys
 import asyncio
+import time
+import ctypes
+import uuid
 import win32com.client
 from fuzzywuzzy import process
 from livekit.agents import function_tool
-from ctypes import cast, POINTER
+from ctypes import cast, POINTER, wintypes
 from comtypes import CLSCTX_ALL
 
 try:
@@ -33,9 +36,54 @@ logger = logging.getLogger(__name__)
 
 # Cache for file index
 _FILE_INDEX_CACHE = None
+_FILE_INDEX_LOCK = asyncio.Lock()
+
+# Serialises Start Menu app launches and shell invocations, which are global
+# shared resources — parallel use corrupts both.
+_LAUNCH_LOCK = asyncio.Lock()
+_SHELL_LOCK = asyncio.Lock()
+
+# Folder/file names we never want to walk into — these are huge and irrelevant
+# for "open my X folder" style commands, and scanning them wastes minutes.
+_EXCLUDED_DIR_NAMES = {
+    "$recycle.bin", "system volume information", "windows", "programdata",
+    "node_modules", ".git", "$windows.~bt", "$windows.~ws",
+    "program files", "program files (x86)", "appdata",
+}
 # _APP_INDEX_CACHE is no longer strictly needed for the "Start Menu automation" method,
 # but we might keep it if we ever want to revert or use fallback. 
 # For now, we follow rules causing us to rely on Windows search.
+
+# Spoken app names rarely match the real window title ("VS Code" vs
+# "... - Visual Studio Code"), which made close/focus report "window not found"
+# for apps that were clearly open. Expand known aliases before matching.
+_WINDOW_ALIASES = {
+    "vs code": ["visual studio code", "code"],
+    "vscode": ["visual studio code", "code"],
+    "visual studio code": ["visual studio code", "code"],
+    "chrome": ["google chrome", "chrome"],
+    "google chrome": ["google chrome", "chrome"],
+    "notepad": ["notepad"],
+    "whatsapp": ["whatsapp"],
+    "explorer": ["file explorer", "explorer"],
+    "powershell": ["powershell", "windows powershell"],
+    "cmd": ["command prompt", "cmd"],
+    "terminal": ["terminal", "command prompt", "powershell"],
+    "word": ["word"],
+    "excel": ["excel"],
+}
+
+
+def _title_candidates(name: str):
+    """Returns the list of lowercase substrings to match a window title against."""
+    key = (name or "").lower().strip()
+    return _WINDOW_ALIASES.get(key, [key])
+
+
+def _title_matches(window_title: str, name: str) -> bool:
+    title = (window_title or "").lower()
+    return any(c and c in title for c in _title_candidates(name))
+
 
 # -------------------------
 # Global focus utility
@@ -49,7 +97,7 @@ async def focus_window(title_keyword: str) -> bool:
     title_keyword = title_keyword.lower().strip()
 
     for window in gw.getAllWindows():
-        if title_keyword in window.title.lower():
+        if _title_matches(window.title, title_keyword):
             try:
                 if window.isMinimized:
                     window.restore()
@@ -71,49 +119,147 @@ async def focus_window(title_keyword: str) -> bool:
 # -------------------------
 # Optimized File Indexing
 # -------------------------
-async def get_file_index():
-    global _FILE_INDEX_CACHE
-    if _FILE_INDEX_CACHE is not None:
-        return _FILE_INDEX_CACHE
-        
-    logger.info("🔄 Indexing files (First time only)...")
-    base_dirs = ["D:/"]
+_KNOWN_FOLDER_GUIDS = {
+    "desktop": "{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}",
+    "documents": "{FDD39AD0-238F-46AF-ADB4-6C85480369C7}",
+    "downloads": "{374DE290-123F-4565-9164-39C4925E467B}",
+    "pictures": "{33E28130-4E1E-4676-835A-98395C3BC3BB}",
+    "videos": "{18989B1D-99B5-455B-841C-AB7C74E4DDFC}",
+    "music": "{4BD8D571-6D19-48D3-BE97-422220080E43}",
+}
+_known_folder_cache: dict[str, str | None] = {}
+
+
+def _get_known_folder(name: str) -> str | None:
+    """Resolve a Windows known folder (Desktop, Documents, ...) via the real
+    Shell API instead of guessing `%USERPROFILE%\\Desktop`.
+
+    Why this matters: on most Windows 11 machines with OneDrive "Backup"
+    turned on, Desktop/Documents/Pictures are silently REDIRECTED to
+    `%USERPROFILE%\\OneDrive\\Desktop` etc. `%USERPROFILE%\\Desktop` may still
+    exist as an empty leftover folder, so the old code created folders there
+    "successfully" — while File Explorer (which follows the redirect) showed
+    nothing. SHGetKnownFolderPath returns the REAL, redirect-aware path.
+    """
+    if name in _known_folder_cache:
+        return _known_folder_cache[name]
+
+    guid = _KNOWN_FOLDER_GUIDS.get(name)
+    result_path = None
+    if guid and os.name == "nt":
+        try:
+            class GUID(ctypes.Structure):
+                _fields_ = [
+                    ("Data1", wintypes.DWORD), ("Data2", wintypes.WORD),
+                    ("Data3", wintypes.WORD), ("Data4", ctypes.c_ubyte * 8),
+                ]
+            rfid = GUID()
+            ctypes.memmove(ctypes.byref(rfid), uuid.UUID(guid).bytes_le, 16)
+
+            path_ptr = ctypes.c_wchar_p()
+            hresult = ctypes.windll.shell32.SHGetKnownFolderPath(
+                ctypes.byref(rfid), 0, 0, ctypes.byref(path_ptr)
+            )
+            if hresult == 0 and path_ptr.value:
+                result_path = path_ptr.value
+                ctypes.windll.ole32.CoTaskMemFree(path_ptr)
+        except Exception as e:
+            logger.warning(f"SHGetKnownFolderPath failed for {name}: {e}")
+
+    _known_folder_cache[name] = result_path
+    return result_path
+
+
+def _index_base_dirs() -> list[str]:
+    """Where we actually look for the user's files.
+
+    IMPORTANT: This used to be hardcoded to ["D:/"] only, which meant anything
+    created on the C: drive (Desktop, Documents, Downloads — the defaults every
+    other tool in this file uses!) could never be found by folder_file(). That
+    was the #1 cause of "wrong folder opened" bugs. We now index the common
+    user folders first (small + high hit-rate — resolved via the real Windows
+    known-folder API so OneDrive-redirected paths are covered too), then any
+    extra data drives.
+    """
+    user_profile = os.environ.get("USERPROFILE", "C:\\")
+    names = ["desktop", "documents", "downloads", "pictures", "videos"]
+    dirs = []
+    for name in names:
+        dirs.append(_get_known_folder(name) or os.path.join(user_profile, name.capitalize()))
+    for drive in ("D:/", "E:/", "F:/"):
+        if os.path.exists(drive):
+            dirs.append(drive)
+    return dirs
+
+
+def _build_file_index_sync() -> list[dict]:
+    """Blocking directory walk. MUST be called via asyncio.to_thread — never
+    directly on the event loop, or the whole voice session freezes (this is
+    what caused the ~40s freezes / dropped WebSocket connections you saw)."""
     item_index = []
-    
-    # Run in thread to avoid blocking main loop, although here we await it.
-    for base_dir in base_dirs:
+    for base_dir in _index_base_dirs():
         if not os.path.exists(base_dir):
             continue
-            
-        # Limit depth or exclude system folders if needed to speed up
         for root, dirs, files in os.walk(base_dir):
-            if "$RECYCLE.BIN" in root or "System Volume Information" in root:
-                continue
-                
+            # Prune excluded dirs IN PLACE so os.walk doesn't descend into them
+            dirs[:] = [d for d in dirs if d.lower() not in _EXCLUDED_DIR_NAMES]
             for d in dirs:
                 item_index.append({"name": d, "path": os.path.join(root, d), "type": "folder"})
             for f in files:
                 item_index.append({"name": f, "path": os.path.join(root, f), "type": "file"})
-                
-    _FILE_INDEX_CACHE = item_index
-    logger.info(f"✅ Indexed {len(item_index)} items.")
     return item_index
+
+
+async def get_file_index(force_refresh: bool = False):
+    global _FILE_INDEX_CACHE
+    async with _FILE_INDEX_LOCK:
+        if _FILE_INDEX_CACHE is not None and not force_refresh:
+            return _FILE_INDEX_CACHE
+
+        logger.info("🔄 Indexing files (first time only, running off the main thread)...")
+        # asyncio.to_thread keeps the voice/RTC event loop alive while this runs
+        item_index = await asyncio.to_thread(_build_file_index_sync)
+        _FILE_INDEX_CACHE = item_index
+        logger.info(f"✅ Indexed {len(item_index)} items.")
+        return item_index
+
+
+def _add_to_index_cache(name: str, path: str, item_type: str) -> None:
+    """Incrementally add a freshly created item instead of dropping the whole
+    cache (which would force a slow full re-walk on the very next command)."""
+    global _FILE_INDEX_CACHE
+    if _FILE_INDEX_CACHE is not None:
+        _FILE_INDEX_CACHE.append({"name": name, "path": path, "type": item_type})
+
 
 async def search_item(query, index, item_type):
     filtered = [item for item in index if item["type"] == item_type]
-    choices = [item["name"] for item in filtered]
-    if not choices or not query:
+    if not filtered or not query:
         return None
-        
+
+    query_clean = query.strip()
     # If the AI passes a giant sentence, trim it to help fuzzy match
-    if len(query.split()) > 4:
-        # Just use the last few words which are usually the file name
-        query = " ".join(query.split()[-3:])
-        
-    best_match, score = process.extractOne(query, choices)
-    logger.info(f"🔍 Matched '{query}' to '{best_match}' with score {score}")
-    
-    # Increase threshold to prevent weird false positives
+    if len(query_clean.split()) > 4:
+        query_clean = " ".join(query_clean.split()[-3:])
+    query_lower = query_clean.lower()
+
+    # 1. Exact (case-insensitive) match first — fast, deterministic, and avoids
+    #    the fuzzy scorer entirely for the common case.
+    for item in filtered:
+        if item["name"].lower() == query_lower:
+            return item
+
+    # 2. Unambiguous substring match (e.g. "project" -> "My First Project")
+    substring_hits = [item for item in filtered if query_lower in item["name"].lower()]
+    if len(substring_hits) == 1:
+        return substring_hits[0]
+
+    # 3. Fuzzy fallback only — on a huge, unrelated name pool this can produce
+    #    odd high scores, so it stays a last resort with a strict threshold.
+    choices = [item["name"] for item in filtered]
+    best_match, score = process.extractOne(query_clean, choices)
+    logger.info(f"🔍 Matched '{query_clean}' to '{best_match}' with score {score}")
+
     if score >= 88:
         for item in filtered:
             if item["name"] == best_match:
@@ -139,9 +285,12 @@ def resolve_location(location: str) -> str:
     """Helper to resolve common location names into absolute Windows paths."""
     location = location.lower().strip()
     user_profile = os.environ.get("USERPROFILE", "C:\\")
-    
+
     # Common mappings
     if location in ["desktop", "documents", "downloads", "music", "pictures", "videos"]:
+        known = _get_known_folder(location)
+        if known:
+            return known
         return os.path.join(user_profile, location.capitalize())
         
     if location in ["c drive", "c:"]: return "C:\\"
@@ -152,7 +301,7 @@ def resolve_location(location: str) -> str:
         return location
         
     # Default fallback
-    return os.path.join(user_profile, "Desktop")
+    return _get_known_folder("desktop") or os.path.join(user_profile, "Desktop")
 
 @function_tool
 async def create_system_folder(folder_name: str, location: str = "Desktop") -> str:
@@ -171,6 +320,7 @@ async def create_system_folder(folder_name: str, location: str = "Desktop") -> s
             return f"⚠ Folder already exists at: {full_path}"
             
         os.makedirs(full_path, exist_ok=True)
+        _add_to_index_cache(folder_name, full_path, "folder")
         return f"✅ Folder '{folder_name}' successfully created at: {base_path}"
     except Exception as e:
         return f"❌ Failed to create folder: {e}"
@@ -191,7 +341,8 @@ async def create_system_file(file_name: str, content: str = "", location: str = 
         
         with open(full_path, "w", encoding="utf-8") as f:
             f.write(content)
-            
+
+        _add_to_index_cache(file_name, full_path, "file")
         return f"✅ File '{file_name}' successfully created at: {base_path}"
     except Exception as e:
         return f"❌ Failed to create file: {e}"
@@ -289,26 +440,71 @@ async def open_app(app_title: str) -> str:
     if is_website(app_title):
         url = get_url(app_title)
         try:
-            # Open chrome directly
-            subprocess.run(f'start chrome "{url}"', shell=True)
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None, lambda: subprocess.run(f'start chrome "{url}"', shell=True)
+            )
             return f"🌐 Opening website: {url}"
         except Exception as e:
             return f"❌ Failed to open website: {e}"
 
     # 2. Assume Desktop App -> Use Start Menu Automation
     try:
-        # Simulate Win key -> Type -> Enter
-        pyautogui.press('win')
-        await asyncio.sleep(0.5) # Wait for start menu animation
-        
-        pyautogui.write(app_title, interval=0.05)
-        await asyncio.sleep(0.5) # Wait for search results
-        
-        pyautogui.press('enter')
-        
-        return f"🚀 Launching app via Start Menu: {app_title}"
+        loop = asyncio.get_running_loop()
+
+        # Start Menu automation is a GLOBAL, shared resource: it types into
+        # whatever search box is open. When a workflow fires two launches in
+        # the same turn, the second Win-press lands while the first is still
+        # typing, so both searches get mangled and one or both apps fail to
+        # open. Serialising launches (and waiting for the window to actually
+        # appear) makes multi-step routines reliable.
+        async with _LAUNCH_LOCK:
+            before = await loop.run_in_executor(None, _count_windows, app_title)
+
+            def _launch():
+                pyautogui.press('win')
+                time.sleep(0.7)  # Wait for start menu animation
+                # Clear anything the previous launch may have left behind.
+                pyautogui.hotkey('ctrl', 'a')
+                pyautogui.press('backspace')
+                pyautogui.write(app_title, interval=0.05)
+                time.sleep(0.9)  # Wait for search results to resolve
+                pyautogui.press('enter')
+
+            await loop.run_in_executor(None, _launch)
+
+            # Wait (up to ~8s) for the app window to actually show up so the
+            # caller — and any following workflow step — knows it's ready.
+            for _ in range(16):
+                await asyncio.sleep(0.5)
+                now = await loop.run_in_executor(None, _count_windows, app_title)
+                if now > before:
+                    return f"✅ Opened {app_title}."
+
+        return (
+            f"🚀 Sent launch command for {app_title} via Start Menu, but I couldn't "
+            f"confirm its window opened yet — it may still be loading."
+        )
     except Exception as e:
         return f"❌ Failed to launch app via Start Menu: {e}"
+
+def _count_windows(name: str) -> int:
+    """Counts visible windows whose title contains `name` (lowercased match)."""
+    if not win32gui:
+        return 0
+    name = (name or "").lower()
+    count = 0
+    def _enum(hwnd, _):
+        nonlocal count
+        try:
+            if win32gui.IsWindowVisible(hwnd):
+                if name and _title_matches(win32gui.GetWindowText(hwnd), name):
+                    count += 1
+        except Exception as e:
+            logger.debug(f"_count_windows: skipping {hwnd}: {e}")
+    win32gui.EnumWindows(_enum, None)
+    return count
+
 
 @function_tool
 async def close_app(target: str) -> str:
@@ -321,23 +517,35 @@ async def close_app(target: str) -> str:
     if not win32gui:
         return "❌ win32gui load नहीं हुआ।"
 
-    closed_count = 0
-    def enumHandler(hwnd, _):
-        nonlocal closed_count
-        if win32gui.IsWindowVisible(hwnd):
-            curr_title = win32gui.GetWindowText(hwnd).lower()
-            if target.lower() in curr_title:
-                try:
-                    win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
-                    closed_count += 1
-                except Exception:
-                    pass
+    def _do_close():
+        closed = 0
+        def enumHandler(hwnd, _):
+            nonlocal closed
+            try:
+                if win32gui.IsWindowVisible(hwnd):
+                    if _title_matches(win32gui.GetWindowText(hwnd), target):
+                        win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+                        closed += 1
+            except Exception as e:
+                logger.debug(f"close_app: skipping window {hwnd}: {e}")
+        win32gui.EnumWindows(enumHandler, None)
+        return closed
 
-    win32gui.EnumWindows(enumHandler, None)
-    
-    if closed_count > 0:
-        return f"✅ {target} बंद कर दिया गया।"
-    return f"❌ {target} की कोई window नहीं मिली।"
+    loop = asyncio.get_running_loop()
+    closed_count = await loop.run_in_executor(None, _do_close)
+
+    if closed_count == 0:
+        return f"❌ {target} की कोई window नहीं मिली।"
+
+    # Verify it actually closed instead of blindly reporting success.
+    await asyncio.sleep(0.8)
+    still_open = await loop.run_in_executor(None, _count_windows, target)
+    if still_open:
+        return (
+            f"⚠ {target} ko close command bheja, par window abhi bhi khuli hai — "
+            f"shayad unsaved changes save karne ka prompt aaya hai. Screen check kijiye."
+        )
+    return f"✅ {target} बंद कर दिया गया।"
 
 # Jarvis command logic
 @function_tool
@@ -429,7 +637,6 @@ async def control_window(action: str, target: str = "current") -> str:
         target = "all"
         
     logger.info(f"🪟 Window Control: {action} on {target}")
-
     # --- HANDLE "ALL" WINDOWS ---
     if target == "all":
         if action == "minimize":
@@ -470,7 +677,42 @@ async def control_window(action: str, target: str = "current") -> str:
             return f"✅ Restored {target} window."
             
         elif action == "close":
-            pyautogui.hotkey('alt', 'f4')
+            # alt+f4 only closes whatever happens to be focused, and silently
+            # "succeeds" even when nothing closed (this is why Notepad kept
+            # reporting closed while still being open). Close the real window
+            # by handle instead, then verify it actually went away.
+            def _close_by_title(name: str) -> int:
+                if not win32gui:
+                    return -1
+                closed = 0
+                def _enum(hwnd, _):
+                    nonlocal closed
+                    try:
+                        if win32gui.IsWindowVisible(hwnd):
+                            if name and _title_matches(win32gui.GetWindowText(hwnd), name):
+                                win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+                                closed += 1
+                    except Exception as e:
+                        logger.debug(f"close: skipping window {hwnd}: {e}")
+                win32gui.EnumWindows(_enum, None)
+                return closed
+
+            loop = asyncio.get_running_loop()
+            closed_count = await loop.run_in_executor(None, _close_by_title, target)
+
+            if closed_count == -1:
+                pyautogui.hotkey('alt', 'f4')
+                return f"✅ Sent close command to {target}."
+            if closed_count == 0:
+                return f"❌ No open window matching '{target}' — nothing to close."
+
+            await asyncio.sleep(0.8)
+            still_open = await loop.run_in_executor(None, _count_windows, target)
+            if still_open:
+                return (
+                    f"⚠ Sent close to {target}, but a window is still open — "
+                    f"it may be asking to save unsaved changes. Check the screen."
+                )
             return f"✅ Closed {target} window."
             
         elif action == "focus" or action == "switch":
@@ -633,13 +875,15 @@ async def swap_windows(app1: str, app2: str) -> str:
         try:
             w1.moveTo(rect2[0], rect2[1])
             w1.resizeTo(rect2[2], rect2[3])
-        except: pass # Ignore if move fails 
+        except Exception as e:
+            logger.warning(f"swap_windows: could not move/resize '{app1}': {e}")
 
         # Apply 1's rect to 2
         try:
             w2.moveTo(rect1[0], rect1[1])
             w2.resizeTo(rect1[2], rect1[3])
-        except: pass
+        except Exception as e:
+            logger.warning(f"swap_windows: could not move/resize '{app2}': {e}")
 
         # Restore max state if needed
         # Logic: If W1 IS taking W2's place, and W2 WAS Max, then W1 should become Max.
@@ -673,7 +917,16 @@ async def take_screenshot() -> str:
         
         # Run in executor to avoid blocking
         await asyncio.get_event_loop().run_in_executor(None, pyautogui.screenshot, filepath)
-        
+
+        # Register it as the active file so "open it" / open_current_file works
+        # right after taking a screenshot (previously the path was never stored,
+        # so open_current_file had no idea what to open).
+        try:
+            from memory_store import memory as _memory
+            _memory.set_active_file(filepath)
+        except Exception as e:
+            logger.warning(f"take_screenshot: could not record active file: {e}")
+
         return f"📸 Screenshot saved: {filepath}"
     except Exception as e:
         return f"❌ Screenshot failed: {e}"
@@ -684,26 +937,33 @@ async def set_volume(level: int) -> str:
     Sets the system volume to a specific level (0-100).
     """
     try:
-        from comtypes import CLSCTX_ALL
-        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-        
-        devices = AudioUtilities.GetSpeakers()
-        interface = devices.Activate(
-            IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-        volume = cast(interface, POINTER(IAudioEndpointVolume))
-        
-        # Clamp between 0.0 and 1.0 (vector volume not scalar db)
-        # pycaw uses scalar 0.0 to 1.0? No, usually SetMasterVolumeLevelScalar
-        
-        scalar = max(0.0, min(1.0, level / 100.0))
-        volume.SetMasterVolumeLevelScalar(scalar, None)
-        
+        level = max(0, min(100, int(level)))
+
+        def _apply():
+            # COM must be initialised on whichever thread talks to the Windows
+            # audio endpoint; without this the call fails on worker threads.
+            from comtypes import CLSCTX_ALL, CoInitialize, CoUninitialize
+            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+
+            CoInitialize()
+            try:
+                devices = AudioUtilities.GetSpeakers()
+                interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+                volume = interface.QueryInterface(IAudioEndpointVolume)
+                volume.SetMasterVolumeLevelScalar(max(0.0, min(1.0, level / 100.0)), None)
+            finally:
+                try:
+                    CoUninitialize()
+                except Exception:
+                    pass
+
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _apply)
         return f"🔊 Volume set to {level}%."
     except ImportError:
         return "❌ pycaw/comtypes missing. Install them for volume control."
     except Exception as e:
-        # Fallback using nircmd or sendkeys if pycaw fails? 
-        # For now return error
+        logger.error(f"set_volume failed: {e}")
         return f"❌ Volume control failed: {e}"
 
 @function_tool
@@ -758,7 +1018,9 @@ async def get_connected_devices() -> str:
             ms = [d['name'] for d in ds if d['max_input_channels'] > 0]
             ss = [d['name'] for d in ds if d['max_output_channels'] > 0]
             return list(set(ms)), list(set(ss))
-        except: return [], []
+        except Exception as e:
+            logger.warning(f"get_connected_devices: audio device query failed: {e}")
+            return [], []
 
     # 2. Cameras (PowerShell is more robust than WMIC on Win11)
     async def scan_cameras():
@@ -771,7 +1033,8 @@ async def get_connected_devices() -> str:
             stdout, _ = await proc.communicate()
             lines = stdout.decode().strip().split('\n')
             return [line.strip() for line in lines if line.strip()]
-        except:
+        except Exception as e:
+            logger.warning(f"get_connected_devices: camera scan failed: {e}")
             return []
 
     # 3. ADB Devices
@@ -792,7 +1055,8 @@ async def get_connected_devices() -> str:
                             model = p.split(":")[1]
                     phones.append(f"{model} ({parts[0]})")
             return phones
-        except:
+        except Exception as e:
+            logger.warning(f"get_connected_devices: ADB scan failed: {e}")
             return []
 
     # 4. USB Devices (Keyboards/Mice/etc)
@@ -812,7 +1076,8 @@ async def get_connected_devices() -> str:
                 if l and "HID" not in l and "Device" not in l: # Filter generic "USB Input Device"
                      devices.add(l)
             return list(devices)
-         except:
+         except Exception as e:
+             logger.warning(f"get_connected_devices: USB device scan failed: {e}")
              return []
 
     try:
@@ -841,3 +1106,172 @@ async def get_connected_devices() -> str:
 
     except Exception as e:
         return f"Error scanning devices: {e}"
+
+
+@function_tool
+async def run_shell_command(command: str, timeout_seconds: int = 20) -> str:
+    """
+    Runs a Windows PowerShell command DIRECTLY (no GUI automation involved —
+    no opening a terminal window, no typing into it) and returns its real
+    output as text.
+
+    Use this for anything that needs a system/diagnostic command — checking
+    connected Bluetooth devices, current Wi-Fi network, disk space, running
+    processes, etc. — instead of manually opening PowerShell and typing into
+    it, which is slow and unreliable.
+
+    Arguments:
+    - command: The full PowerShell command to run,
+      e.g. "Get-PnpDevice | Where-Object { $_.Class -eq 'Bluetooth' }".
+    - timeout_seconds: Max seconds to wait before giving up (default 20).
+    """
+    def _run():
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+                capture_output=True, text=True, timeout=timeout_seconds,
+                # Without an explicit cwd, PowerShell inherits whatever
+                # directory the agent happens to be in, which produced
+                # intermittent "file not found" results for relative paths.
+                cwd=os.path.expanduser("~"),
+            )
+            output = (result.stdout or "").strip()
+            error = (result.stderr or "").strip()
+            if result.returncode != 0 and error:
+                return f"❌ Command failed: {error[:500]}"
+            return output[:2000] if output else "✅ Command ran successfully with no output."
+        except subprocess.TimeoutExpired:
+            return f"❌ Command timed out after {timeout_seconds}s."
+        except Exception as e:
+            return f"❌ Failed to run command: {e}"
+
+    loop = asyncio.get_running_loop()
+    # Serialise: concurrent PowerShell launches were causing sporadic
+    # "resource already in use" failures.
+    async with _SHELL_LOCK:
+        result = await loop.run_in_executor(None, _run)
+        # One transient-failure retry (console/resource contention).
+        if result.startswith("❌") and "already in use" in result.lower():
+            await asyncio.sleep(1.0)
+            result = await loop.run_in_executor(None, _run)
+        return result
+
+
+# Which interpreter to use for a given saved file's extension.
+_RUNNERS = {
+    ".py": ["python"],
+    ".js": ["node"],
+    ".ps1": ["powershell", "-NoProfile", "-File"],
+}
+
+# Libraries that open their own persistent GUI window and don't exit on their
+# own (games, guis, animations). Running these with subprocess.run(timeout=..)
+# blocks the tool call until the window is closed or the timeout hits — which,
+# if the model retries while the previous call is still blocked, stacks up
+# multiple long-running calls on top of each other. For these we launch the
+# process and return immediately instead of waiting for it to exit.
+_GUI_MARKERS = (
+    "import pygame", "import tkinter", "from tkinter", "import turtle",
+    "import PyQt5", "import PyQt6", "import PySide2", "import PySide6",
+    "import wx", "import kivy", "from kivy",
+)
+
+# Guards against the model re-issuing run_code_file for the same GUI file
+# multiple times in quick succession (e.g. because it didn't get a reply in
+# time and retried) — that would otherwise open several duplicate windows.
+_RECENT_GUI_LAUNCHES = {}
+_GUI_LAUNCH_COOLDOWN = 15  # seconds
+
+
+@function_tool
+async def run_code_file(file_path: str) -> str:
+    """
+    Runs a code file that has ALREADY been saved to disk (via save_file_as)
+    and returns its real output — directly through the interpreter, no GUI
+    typing into a terminal involved.
+
+    IMPORTANT: file_path must be a real path on disk. If you don't know
+    whether/where the current code has been saved, do NOT guess a path —
+    ask the user what filename to save it as, call save_file_as (its reply
+    tells you the exact saved path), and then call this tool with that path.
+
+    For games/GUI apps (pygame, tkinter, turtle, etc.) this launches the
+    window and returns immediately — it does NOT wait for the window to
+    close, since that would block the conversation until the user quits it.
+
+    Arguments:
+    - file_path: Full path to the saved file, e.g. "D:\\inventory management system.py".
+      This is exactly what save_file_as's success reply gives you.
+    """
+    path = (file_path or "").strip().strip('"')
+
+    # save_file_as drives a GUI Save-As dialog, so the file can take a moment to
+    # actually appear on disk. Without this wait, running right after saving
+    # wrongly reported NEEDS_SAVE even though the save had been requested.
+    if path and not os.path.exists(path):
+        for _ in range(6):
+            await asyncio.sleep(0.5)
+            if os.path.exists(path):
+                break
+
+    if not path or not os.path.exists(path):
+        return (
+            "❌ NEEDS_SAVE: This file hasn't been saved to disk yet (or the path "
+            "is wrong). Ask the user what filename/location to save it as, call "
+            "save_file_as, then call run_code_file again with the path it returns."
+        )
+
+    ext = os.path.splitext(path)[1].lower()
+    runner = _RUNNERS.get(ext)
+    if not runner:
+        return f"❌ I don't know how to run '{ext}' files yet."
+
+    # Detect GUI/game code so we don't block waiting for a window that won't
+    # close on its own.
+    is_gui = False
+    if ext == ".py":
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                head = f.read(4000)
+            is_gui = any(marker in head for marker in _GUI_MARKERS)
+        except Exception:
+            pass
+
+    def _launch_gui():
+        now = time.time()
+        last = _RECENT_GUI_LAUNCHES.get(path)
+        if last and (now - last) < _GUI_LAUNCH_COOLDOWN:
+            return "✅ Already launched a few seconds ago — the window should already be open on your screen."
+        try:
+            # Fire-and-forget: don't wait for the window to be closed.
+            subprocess.Popen(
+                runner + [path],
+                creationflags=subprocess.CREATE_NEW_CONSOLE
+                if hasattr(subprocess, "CREATE_NEW_CONSOLE") else 0,
+            )
+            _RECENT_GUI_LAUNCHES[path] = now
+            return "✅ Launched — the window should be opening on your screen now."
+        except Exception as e:
+            return f"❌ Failed to launch: {e}"
+
+    def _run_and_capture():
+        try:
+            result = subprocess.run(
+                runner + [path], capture_output=True, text=True, timeout=15
+            )
+            output = (result.stdout or "").strip()
+            error = (result.stderr or "").strip()
+            if result.returncode != 0:
+                return f"❌ Ran with errors:\n{(error or output)[:1500]}"
+            return output[:2000] if output else "✅ Ran successfully with no output."
+        except subprocess.TimeoutExpired:
+            return (
+                "❌ The code is still running after 15s (possible infinite loop, "
+                "a GUI window, or it's waiting for input) — if this opened a "
+                "window/game, it's already on screen; no need to run it again."
+            )
+        except Exception as e:
+            return f"❌ Failed to run file: {e}"
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _launch_gui if is_gui else _run_and_capture)
