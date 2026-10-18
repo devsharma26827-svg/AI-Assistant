@@ -3,6 +3,7 @@ from memory_store import memory
 import logging
 import asyncio
 import threading
+from security_tools import scan_text_for_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +29,31 @@ async def remember_fact(category: str, fact: str) -> str:
 
 def _remember_fact_impl(category: str, fact: str) -> str:
     with _memory_lock:
+        is_safe, masked, warn = scan_text_for_secrets(fact)
+        if not is_safe:
+            return f"⛔ Cannot store sensitive secret in personal memory: {warn}."
         logger.info(f"Remembering/Reinforcing: [{category}] {fact}")
         return memory.add_fact(category, fact)
+
+@function_tool
+async def forget_fact(category: str, fact: str) -> str:
+    """
+    Removes a fact from memory. Use this when the user says "Forget that I...", "Remove this detail", or corrects a fact.
+    
+    Args:
+        category: The category of the fact (e.g., 'hobbies', 'work', 'health', 'goals').
+        fact: The specific detail to remove.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _forget_fact_impl, category, fact)
+    except Exception as e:
+        return f"Failed to remove memory: {e}"
+
+def _forget_fact_impl(category: str, fact: str) -> str:
+    with _memory_lock:
+        logger.info(f"Forgetting fact: [{category}] {fact}")
+        return memory.remove_fact(category, fact)
 
 @function_tool
 async def learn_habit(trigger: str, action: str) -> str:

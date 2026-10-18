@@ -1,11 +1,9 @@
 import logging
 from livekit.agents import function_tool
-from memory_store import MemoryStore
+from memory_store import memory
 
 logger = logging.getLogger("learning_tools")
 logger.setLevel(logging.INFO)
-
-memory = MemoryStore()
 
 @function_tool
 async def manage_self_learning(action: str, tool_name: str = None, outcome: str = None, details: str = None, category: str = None, key: str = None, value: str = None) -> str:

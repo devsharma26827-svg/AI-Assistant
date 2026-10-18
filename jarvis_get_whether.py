@@ -44,13 +44,15 @@ async def get_weather(city: str = "") -> str:
     api_key = os.getenv("OPENWEATHER_API_KEY")
 
     if not api_key:
-        logger.error("OpenWeather API key missing है।")
-        return "Environment variables में OpenWeather API key नहीं मिली।"
+        logger.error("OpenWeather API key missing.")
+        return "❌ Environment variables mein OpenWeather API key nahi mili. Kripya .env.local mein OPENWEATHER_API_KEY add karein."
 
-    if not city:
+    if not city or city.lower() == "unknown":
         city = await get_current_city()
+        if not city or city.lower() == "unknown":
+            return "❌ City automatically detect nahi ho saki. Kripya city ka naam bataiye (jaise 'Weather in Delhi')."
 
-    logger.info(f"City के लिए weather fetch किया जा रहा है।: {city}")
+    logger.info(f"Fetching weather for city: {city}")
     url = "https://api.openweathermap.org/data/2.5/weather"
     params = {
         "q": city,
@@ -64,8 +66,14 @@ async def get_weather(city: str = "") -> str:
             None, lambda: requests.get(url, params=params, timeout=10)
         )
         if response.status_code != 200:
-            logger.error(f"OpenWeather API में error आया।: {response.status_code} - {response.text}")
-            return f"Error: {city} के लिए weather fetch नहीं कर पाए। कृपया city name चेक करें।"
+            logger.error(f"OpenWeather API error: {response.status_code} - {response.text}")
+            if response.status_code == 401:
+                return "❌ OpenWeather API Key invalid ya unauthorized hai. Kripya .env.local mein OPENWEATHER_API_KEY check karein."
+            if response.status_code == 404:
+                return f"❌ City '{city}' nahi mili. Kripya city ka sahi naam batayein."
+            if response.status_code == 429:
+                return "❌ OpenWeather API rate limit ya quota exceed ho gaya hai."
+            return f"❌ {city} ke liye weather fetch nahi kar paye (Status {response.status_code})."
 
         data = response.json()
         weather = data["weather"][0]["description"].title()

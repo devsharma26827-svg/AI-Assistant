@@ -283,22 +283,23 @@ async def play_file(path):
 
 def resolve_location(location: str) -> str:
     """Helper to resolve common location names into absolute Windows paths."""
-    location = location.lower().strip()
+    location_clean = (location or "").strip()
+    loc_lower = location_clean.lower()
     user_profile = os.environ.get("USERPROFILE", "C:\\")
 
     # Common mappings
-    if location in ["desktop", "documents", "downloads", "music", "pictures", "videos"]:
-        known = _get_known_folder(location)
+    if loc_lower in ["desktop", "documents", "downloads", "music", "pictures", "videos"]:
+        known = _get_known_folder(loc_lower)
         if known:
             return known
-        return os.path.join(user_profile, location.capitalize())
+        return os.path.join(user_profile, loc_lower.capitalize())
         
-    if location in ["c drive", "c:"]: return "C:\\"
-    if location in ["d drive", "d:"]: return "D:\\"
+    if loc_lower in ["c drive", "c:"]: return "C:\\"
+    if loc_lower in ["d drive", "d:"]: return "D:\\"
     
-    # If absolute path is provided by LLM (e.g. C:/Users/Dev/Downloads)
-    if ":" in location or location.startswith("/"):
-        return location
+    # If absolute path is provided by LLM (e.g. C:/Users/Dev/Downloads or D:\Projects)
+    if ":" in location_clean or location_clean.startswith("/") or location_clean.startswith("\\"):
+        return location_clean
         
     # Default fallback
     return _get_known_folder("desktop") or os.path.join(user_profile, "Desktop")
@@ -374,6 +375,13 @@ async def delete_item(path):
 # -------------------------
 # Web & Smart App Opener
 # -------------------------
+_COMMON_DOC_EXTENSIONS = {
+    ".py", ".txt", ".json", ".csv", ".pdf", ".docx", ".xlsx", ".pptx", ".md",
+    ".png", ".jpg", ".jpeg", ".gif", ".mp3", ".wav", ".mp4", ".zip", ".tar",
+    ".gz", ".7z", ".exe", ".bat", ".cmd", ".ps1", ".sh", ".c", ".cpp", ".java",
+    ".rs", ".go", ".html", ".css", ".js", ".ts", ".xml", ".yaml", ".yml"
+}
+
 def is_website(name: str) -> bool:
     """Checks if the request is likely a website."""
     name = name.lower().strip()
@@ -388,8 +396,16 @@ def is_website(name: str) -> bool:
     if any(k in name for k in web_keywords):
         return True
         
-    if "." in name and not name.endswith(".exe"): # e.g. "example.com"
+    if name.startswith("http://") or name.startswith("https://") or name.startswith("www."):
         return True
+
+    if "." in name:
+        ext = os.path.splitext(name)[1].lower()
+        if ext in _COMMON_DOC_EXTENSIONS:
+            return False
+        common_tlds = (".com", ".org", ".net", ".in", ".io", ".ai", ".gov", ".edu", ".co", ".app", ".dev", ".xyz")
+        if any(name.endswith(tld) for tld in common_tlds):
+            return True
         
     return False
 
@@ -424,11 +440,11 @@ async def open_app(app_title: str) -> str:
     Smartly opens apps or websites based on user request.
     
     Rules:
-    1. If it's a website (YouTube, Google, etc.) -> Opens in Chrome.
+    1. If it's a website (YouTube, Google, etc.) -> Opens in default browser.
     2. If it's an app (Notepad, Word, etc.) -> Opens via Start Menu (Win+Type+Enter).
     
     Example prompts:
-    - "Open YouTube" -> Opens Chrome with YouTube.
+    - "Open YouTube" -> Opens default browser with YouTube.
     - "Open Notepad" -> Presses Win, types 'Notepad', presses Enter.
     """
     if not pyautogui:
@@ -442,7 +458,7 @@ async def open_app(app_title: str) -> str:
         try:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
-                None, lambda: subprocess.run(f'start chrome "{url}"', shell=True)
+                None, lambda: subprocess.run(f'start "" "{url}"', shell=True)
             )
             return f"🌐 Opening website: {url}"
         except Exception as e:
@@ -911,8 +927,8 @@ async def take_screenshot() -> str:
         if not pyautogui:
             return "❌ pyautogui missing."
             
-        desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-        filename = f"screenshot_{int(asyncio.get_event_loop().time())}.png"
+        desktop_path = resolve_location("desktop")
+        filename = f"screenshot_{int(time.time())}.png"
         filepath = os.path.join(desktop_path, filename)
         
         # Run in executor to avoid blocking
@@ -948,9 +964,15 @@ async def set_volume(level: int) -> str:
             CoInitialize()
             try:
                 devices = AudioUtilities.GetSpeakers()
-                interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+                if not devices:
+                    return False
+                dev = devices if hasattr(devices, "Activate") else getattr(devices, "_dev", devices)
+                if not dev:
+                    return False
+                interface = dev.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
                 volume = interface.QueryInterface(IAudioEndpointVolume)
                 volume.SetMasterVolumeLevelScalar(max(0.0, min(1.0, level / 100.0)), None)
+                return True
             finally:
                 try:
                     CoUninitialize()
@@ -958,8 +980,10 @@ async def set_volume(level: int) -> str:
                     pass
 
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, _apply)
-        return f"🔊 Volume set to {level}%."
+        success = await loop.run_in_executor(None, _apply)
+        if success:
+            return f"🔊 Volume set to {level}%."
+        return "❌ Volume control failed: No active audio endpoint found."
     except ImportError:
         return "❌ pycaw/comtypes missing. Install them for volume control."
     except Exception as e:

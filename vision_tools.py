@@ -73,7 +73,13 @@ async def _get_gemini_vision_response(full_prompt: str, custom_image=None) -> st
             genai.configure(api_key=active_key)
             model = genai.GenerativeModel(model_name)
             response = model.generate_content([prompt, img])
-            return response.text
+            try:
+                return response.text
+            except (ValueError, AttributeError) as ve:
+                if hasattr(response, "candidates") and response.candidates:
+                    finish_reason = getattr(response.candidates[0], "finish_reason", "unknown")
+                    return f"⚠ Vision response blocked by content safety filters (Reason: {finish_reason})."
+                return f"⚠ Vision response was empty or blocked: {ve}"
         return gemini_key_manager.execute_with_retry(_api_call, max_retries_per_key=1)
 
     try:

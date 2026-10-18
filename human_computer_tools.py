@@ -270,7 +270,9 @@ async def human_press_shortcut(keys: str) -> str:
     """
     logger.info(f"Pressing shortcut: {keys}")
     try:
-        key_list = [k.strip() for k in keys.split("+")]
+        key_list = [k.strip().lower() for k in keys.split("+") if k.strip()]
+        if not key_list:
+            return "❌ No keys provided to press."
         
         def _perform_hotkey():
             _guard_failsafe()

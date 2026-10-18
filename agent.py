@@ -95,7 +95,7 @@ from whatsapp_tools import whatsapp_message
 from content_writer_tools import write_text, write_code
 
 from memory_store import memory
-from intelligence_tools import remember_fact, update_emotional_state, update_life_phase, get_user_context, learn_habit, forget_habit, set_communication_style
+from intelligence_tools import remember_fact, forget_fact, update_emotional_state, update_life_phase, get_user_context, learn_habit, forget_habit, set_communication_style
 from file_manager_tools import save_file_as, open_current_file
 from translation_tools import translate_text, translate_document, set_language_mode
 from project_tools import create_project, add_task_to_project, get_project_status, update_task_status
@@ -123,7 +123,7 @@ CORE_TOOLS = [
     create_system_folder, create_system_file,
     whatsapp_message,
     write_text, write_code,
-    remember_fact, get_user_context,
+    remember_fact, forget_fact, forget_habit, get_user_context,
     save_file_as, open_current_file,
     translate_text,
     set_system_volume, set_screen_brightness,

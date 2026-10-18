@@ -67,7 +67,9 @@ async def translate_text(text: str, target_language: str) -> str:
         if fallback:
             return f"Translated ({target_language}): {fallback}"
 
-        raise last_error
+        if last_error:
+            raise last_error
+        return f"❌ Translation failed for {target_language}."
     except Exception as e:
         logger.error(f"Translation failed: {e}")
         return f"❌ Translation failed: {e}"

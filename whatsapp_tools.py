@@ -47,17 +47,57 @@ def _guard_failsafe():
         logger.debug(f"failsafe guard skipped: {e}")
 
 
+def _is_whatsapp_open() -> bool:
+    """Checks if WhatsApp window is present on the system."""
+    try:
+        import win32gui
+        found = False
+        def _enum(hwnd, _):
+            nonlocal found
+            if win32gui.IsWindowVisible(hwnd):
+                title = win32gui.GetWindowText(hwnd).lower()
+                if "whatsapp" in title:
+                    found = True
+        win32gui.EnumWindows(_enum, None)
+        return found
+    except Exception:
+        return True
+
 def _focus_whatsapp():
-    """Activates the WhatsApp window."""
+    """Activates the WhatsApp window and verifies it is visible."""
     try:
         _guard_failsafe()
+        
+        # Try direct activation if already running
+        try:
+            import pygetwindow as gw
+            windows = [w for w in gw.getWindowsWithTitle("WhatsApp") if w.visible]
+            if windows:
+                win = windows[0]
+                if win.isMinimized:
+                    win.restore()
+                win.activate()
+                time.sleep(WAIT_SHORT)
+                return True
+        except Exception:
+            pass
+
+        # Otherwise launch via Start Menu
         pyautogui.press('win')
         time.sleep(WAIT_SHORT)
         pyautogui.write('WhatsApp')
         time.sleep(WAIT_SHORT)
         pyautogui.press('enter')
-        time.sleep(LOAD_WAIT) 
-        return True
+        
+        # Wait up to 3 seconds for WhatsApp window to appear
+        for _ in range(6):
+            time.sleep(0.5)
+            if _is_whatsapp_open():
+                time.sleep(WAIT_SHORT)
+                return True
+                
+        logger.warning("WhatsApp window was not detected after launch attempt.")
+        return False
     except Exception as e:
         logger.error(f"Failed to focus WhatsApp: {e}")
         return False

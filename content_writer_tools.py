@@ -3,20 +3,14 @@ import logging
 import pyautogui
 from livekit.agents import function_tool
 from system_control_tools import open_app, focus_window
-import win32clipboard
-from memory_store import MemoryStore
+import pyperclip
+from memory_store import memory
 from typing_utils import human_like_type
-
-# Initialize Memory
-memory = MemoryStore()
 
 logger = logging.getLogger("content_writer")
 
 def copy_to_clipboard(text):
-    win32clipboard.OpenClipboard()
-    win32clipboard.EmptyClipboard()
-    win32clipboard.SetClipboardData(win32clipboard.CF_UNICODETEXT, text)
-    win32clipboard.CloseClipboard()
+    pyperclip.copy(text)
 
 @function_tool
 async def write_text(content: str, app_name: str = "notepad", create_new_file: bool = True) -> str:
