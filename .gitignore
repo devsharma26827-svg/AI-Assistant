@@ -74,3 +74,11 @@ visualizations/*.pdf
 voice_data/**/*.wav
 !voice_data/dev/*.wav
 *.log
+
+
+
+# Local-only Cynthia runtime data
+.audit_logs/
+.calendars/
+.checkpoints/
+memory.json*.bak
