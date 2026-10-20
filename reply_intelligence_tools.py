@@ -98,7 +98,11 @@ async def auto_reply_decision(
         msg_lower = message_text.lower()
         
         # --- DO NOT REPLY CONDITIONS ---
-        if any(x in msg_lower for x in ["otp", "code", "bank", "money", "pay", "amount", "credit", "debit"]):
+        sensitive_terms = [
+            "otp", "code", "bank", "money", "pay", "amount", "credit", "debit",
+            "password", "pin", "cvv", "credential", "token", "upi", "account"
+        ]
+        if any(x in msg_lower for x in sensitive_terms):
             return json.dumps({"decision": "DO_NOT_REPLY", "reason": "Sensitive/Financial content."})
             
         if any(x in intent for x in ["urgent", "conflict", "work_discussion", "serious"]):

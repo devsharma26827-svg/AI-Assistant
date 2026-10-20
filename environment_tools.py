@@ -1,14 +1,11 @@
 import logging
 import screen_brightness_control as sbc
 from livekit.agents import function_tool
-from memory_store import MemoryStore
+from memory_store import memory
 
 # Setup Logger
 logger = logging.getLogger("environment_tools")
 logger.setLevel(logging.INFO)
-
-# Initialize Memory
-memory = MemoryStore()
 
 # --- Volume Control (PyCAW) ---
 try:
@@ -25,9 +22,13 @@ try:
         CoInitialize()
         try:
             speakers = AudioUtilities.GetSpeakers()
+            if not speakers:
+                return False
             # Newer pycaw returns an AudioDevice wrapper (no .Activate); older
             # versions return the raw IMMDevice pointer. Support both.
             dev = speakers if hasattr(speakers, "Activate") else getattr(speakers, "_dev", speakers)
+            if not dev:
+                return False
             interface = dev.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
             volume = interface.QueryInterface(IAudioEndpointVolume)
 
@@ -73,11 +74,12 @@ async def set_screen_brightness(level: int) -> str:
     """
     import asyncio
     try:
+        level = max(0, min(100, int(level)))
         # Offload blocking DDC/CI call
         await asyncio.to_thread(sbc.set_brightness, level)
         return f"✅ Brightness set to {level}%."
     except Exception as e:
-        return f"❌ Failed to set brightness: {e}"
+        return f"❌ Failed to set brightness ({level}%): {e}. Note: External monitors or some laptop displays do not support DDC/CI software brightness control."
 
 @function_tool
 async def activate_mode(mode_name: str) -> str:

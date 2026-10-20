@@ -49,6 +49,23 @@ class GeminiKeyManager:
         # it recently returned a 429/quota error.
         self._key_cooldowns = {}
 
+    def reload_keys(self):
+        """Reloads keys from environment and clears cooldowns."""
+        self.__init__()
+
+    def has_valid_key(self) -> bool:
+        """Returns True if at least one non-empty API key is configured."""
+        return bool(self.api_keys and any(k.strip() for k in self.api_keys))
+
+    @staticmethod
+    def _mask_key(key: str) -> str:
+        """Masks key for safe logging (never reveals complete secret)."""
+        if not key:
+            return "<empty>"
+        if len(key) <= 8:
+            return "***"
+        return f"...{key[-4:]}"
+
     def get_current_key(self) -> str:
         return self.api_keys[self.current_index]
 
@@ -79,7 +96,7 @@ class GeminiKeyManager:
         old_key = self.api_keys[self.current_index]
         self.current_index = (self.current_index + 1) % len(self.api_keys)
         new_key = self.api_keys[self.current_index]
-        logger.warning(f"🔄 Rotating Gemini API Key: ...{old_key[-4:]} -> ...{new_key[-4:]}")
+        logger.warning(f"🔄 Rotating Gemini API Key: {self._mask_key(old_key)} -> {self._mask_key(new_key)}")
 
     def execute_with_retry(self, action_func, max_retries_per_key=1, fallback_models=None):
         """
@@ -144,7 +161,7 @@ class GeminiKeyManager:
                         # Park this key for a cooldown window so parallel/later
                         # calls don't immediately hammer it again.
                         self._key_cooldowns[current_key] = time.time() + self._parse_retry_delay(str(e))
-                        logger.warning(f"Rate limit hit on key {current_key[-4:]}. Parking it and rotating...")
+                        logger.warning(f"Rate limit hit on key {self._mask_key(current_key)}. Parking it and rotating...")
 
                         if self._all_keys_cooling_down(time.time()):
                             raise Exception(

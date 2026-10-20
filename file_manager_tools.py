@@ -5,11 +5,9 @@ import time
 import pyautogui
 from datetime import datetime
 from livekit.agents import function_tool
-from memory_store import MemoryStore
-from system_control_tools import focus_window, open_app
+from memory_store import memory
+from system_control_tools import focus_window, open_app, resolve_location
 
-# Initialize Memory
-memory = MemoryStore()
 logger = logging.getLogger("file_manager")
 
 @function_tool
@@ -23,17 +21,8 @@ async def save_file_as(file_name: str, folder: str = "Documents") -> str:
     - folder: Folder to save in (e.g., "Desktop", "Documents", "D:\Projects").
     """
     try:
-        # 1. Determine Path
-        # Handle common folders
-        if folder.lower() in ["desktop", "documents", "downloads"]:
-            user_profile = os.environ.get("USERPROFILE", "C:\\")
-            target_dir = os.path.join(user_profile, folder.capitalize())
-        elif ":" in folder: # Absolute path
-            target_dir = folder
-        else:
-            # Default to Documents if unsure
-            target_dir = os.path.join(os.environ.get("USERPROFILE"), "Documents")
-            
+        # 1. Determine Path via redirect-aware location resolver
+        target_dir = resolve_location(folder)
         full_path = os.path.join(target_dir, file_name)
 
         # SAFETY: refuse to silently clobber an existing file. The Save-As

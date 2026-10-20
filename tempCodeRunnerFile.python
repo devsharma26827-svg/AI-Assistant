@@ -1,0 +1,34 @@
+# new code (17-10-2026)
+
+from gensim.models import Word2Vec
+
+# Training corpus (list of tokenized sentences)
+sentences = [
+    ["natural", "language", "processing", "is", "a", "subfield", "of", "ai"],
+    ["word", "embeddings", "capture", "semantic", "relationships"],
+    ["deep", "learning", "has", "transformed", "natural", "language", "processing"],
+    ["word2vec", "learns", "dense", "vector", "representations"],
+    ["the", "skip", "gram", "model", "predicts", "context", "words"],
+    ["machine", "learning", "models", "need", "numerical", "representations"],
+]
+
+# Train a Word2Vec model
+model = Word2Vec(
+    sentences,
+    vector_size=100,    # Embedding dimensionality
+    window=5,           # Context window size
+    min_count=1,        # Minimum word frequency
+    sg=1,               # 1 = Skip-gram, 0 = CBOW
+    epochs=100          # Training epochs
+)
+
+# Find similar words
+print("Words similar to 'language':")
+for word, score in model.wv.most_similar("language", topn=3):
+    print(f"  {word}: {score:.4f}")
+
+# Get the vector for a word
+vector = model.wv["language"]
+print(f"\nVector shape: {vector.shape}")
+print(f"First 5 dimensions: {vector[:5]}")
+

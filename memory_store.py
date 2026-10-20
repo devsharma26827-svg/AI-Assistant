@@ -5,6 +5,10 @@ schedules, emotional context, projects, and custom automation workflows.
 """
 import json
 import os
+import copy
+import shutil
+import time
+import threading
 import logging
 from datetime import datetime
 
@@ -71,34 +75,56 @@ DEFAULT_MEMORY = {
 class MemoryStore:
     def __init__(self, filepath=MEMORY_FILE):
         self.filepath = filepath
+        self._lock = threading.Lock()
         self.memory = self.load_memory()
 
     def load_memory(self):
         if not os.path.exists(self.filepath):
             logger.info("No existing memory found. Creating new memory store.")
-            self.save_memory(DEFAULT_MEMORY)
-            return DEFAULT_MEMORY
+            fresh = copy.deepcopy(DEFAULT_MEMORY)
+            self.save_memory(fresh)
+            return fresh
         
         try:
             with open(self.filepath, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                # Basic migration if habits key is missing
-                if "habits" not in data:
-                    data["habits"] = []
+                if not isinstance(data, dict):
+                    raise ValueError(f"Memory content is not a JSON object: {type(data)}")
+                
+                # Backfill all default schema keys if missing
+                for k, v in DEFAULT_MEMORY.items():
+                    if k not in data:
+                        data[k] = copy.deepcopy(v)
                 return data
         except Exception as e:
             logger.error(f"Failed to load memory: {e}")
-            return DEFAULT_MEMORY
+            # If the file exists but was corrupted, backup the corrupt file so user data is not permanently lost!
+            try:
+                backup_path = f"{self.filepath}.corrupt.{int(time.time())}.bak"
+                shutil.copy2(self.filepath, backup_path)
+                logger.warning(f"Preserved corrupted memory backup at: {backup_path}")
+            except Exception as backup_err:
+                logger.error(f"Failed to create corrupt memory backup: {backup_err}")
+
+            return copy.deepcopy(DEFAULT_MEMORY)
 
     def save_memory(self, data=None):
-        if data is None:
-            data = self.memory
-        try:
-            with open(self.filepath, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=4)
-            logger.info("Memory saved successfully.")
-        except Exception as e:
-            logger.error(f"Failed to save memory: {e}")
+        with self._lock:
+            if data is None:
+                data = self.memory
+            tmp_path = f"{self.filepath}.tmp"
+            try:
+                with open(tmp_path, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, indent=4)
+                os.replace(tmp_path, self.filepath)
+                logger.info("Memory saved successfully.")
+            except Exception as e:
+                logger.error(f"Failed to save memory: {e}")
+                if os.path.exists(tmp_path):
+                    try:
+                        os.remove(tmp_path)
+                    except Exception:
+                        pass
 
     def set_active_file(self, file_path):
         """Updates the context with the last used file path."""
@@ -173,6 +199,31 @@ class MemoryStore:
         self.memory["facts"][category].append(new_item)
         self.save_memory()
         return f"Remembered new fact: [{category}] {fact_text}"
+
+    def remove_fact(self, category: str, fact_text: str) -> str:
+        """
+        Removes a specific fact from a category.
+        """
+        if "facts" not in self.memory or category not in self.memory["facts"]:
+            return f"❌ No facts found under category '{category}'."
+            
+        items = self.memory["facts"][category]
+        target = fact_text.lower().strip()
+        new_items = []
+        found = False
+        
+        for item in items:
+            t = item if isinstance(item, str) else item.get("text", "")
+            if t.lower().strip() == target or target in t.lower().strip():
+                found = True
+            else:
+                new_items.append(item)
+                
+        if found:
+            self.memory["facts"][category] = new_items
+            self.save_memory()
+            return f"✅ Removed fact from '{category}': {fact_text}"
+        return f"❌ Fact '{fact_text}' not found in category '{category}'."
 
     def learn_habit(self, trigger, action):
         timestamp = datetime.now().isoformat()
@@ -759,6 +810,35 @@ Current Focus: {phases.get('current_phase', 'Unknown')} - {phases.get('descripti
                 summary += "   (All tasks completed)\n"
                 
         return summary
+
+    def get_project_detail(self, project_title_or_id):
+        """Returns detailed status of a specific project."""
+        if "projects" not in self.memory or not self.memory["projects"]:
+            return "No projects found."
+        
+        target = None
+        for p in self.memory["projects"]:
+            if p["id"] == project_title_or_id or project_title_or_id.lower() in p["title"].lower():
+                target = p
+                break
+                
+        if not target:
+            return f"❌ Project '{project_title_or_id}' not found."
+            
+        detail = f"📂 **{target['title']}** ({target['progress']}% Complete - {target.get('status', 'active')})\n"
+        detail += f"Description: {target.get('description', 'N/A')}\n"
+        if target.get("deadline"):
+            detail += f"Deadline: {target['deadline']}\n"
+            
+        tasks = target.get("tasks", [])
+        if tasks:
+            detail += "Tasks:\n"
+            for t in tasks:
+                status_icon = "✅" if t.get("status") in ["completed", "done"] else "⏳"
+                detail += f"- {status_icon} [{t.get('status', 'pending').upper()}] {t.get('description')}\n"
+        else:
+            detail += "(No tasks added yet)\n"
+        return detail.strip()
 
     # --- Environment Control Methods ---
     def get_active_mode(self):

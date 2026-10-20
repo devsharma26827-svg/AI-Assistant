@@ -12,12 +12,13 @@ DANGEROUS_EXTENSIONS = [
 ]
 
 SECRET_PATTERNS = [
+    (r"AIzaSy[a-zA-Z0-9\-_]{20,45}", "Google / Gemini API Key"),
     (r"sk-[a-zA-Z0-9]{20,}", "OpenAI API Key"),
     (r"ghp_[a-zA-Z0-9]{20,}", "GitHub Personal Access Token"),
     (r"(?i)password\s*=\s*['\"][^'\"]+['\"]", "Hardcoded Password"),
     (r"(?i)api[-_]?key\s*[:=]\s*['\"][a-zA-Z0-9\-_]{20,}['\"]", "Generic API Key"),
     (r"xox[baprs]-([0-9a-zA-Z]{10,48})?", "Slack Token"),
-    (r"([0-9]{16})", "Prossible Credit Card"), # Simple check, might have lots of false positives, use with care
+    (r"([0-9]{16})", "Possible Credit Card"),
 ]
 
 def scan_text_for_secrets(text: str):
@@ -88,7 +89,11 @@ async def validate_action_safety(action_type: str, details: str) -> str:
              return f"⛔ SECURITY BLOCK: {warn}. Require explicit confirmation to send."
              
     if action_type == "execute_command":
-        dangerous_keywords = ["rm -rf", "format", "del /s", "shutdown", "mkfs"]
+        dangerous_keywords = [
+            "rm -rf", "format", "del /s", "del /f", "rmdir /s", 
+            "remove-item -recurse", "shutdown", "mkfs", "diskpart",
+            "drop database", "drop table"
+        ]
         if any(k in details.lower() for k in dangerous_keywords):
              return f"⛔ SECURITY BLOCK: Destructive command detected. Require explicit confirmation."
 

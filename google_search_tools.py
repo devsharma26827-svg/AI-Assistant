@@ -46,9 +46,15 @@ async def serp_search(query: str) -> str:
             # Offload blocking request
             response = await asyncio.to_thread(requests.get, url, params=params, timeout=15)
             
+            if response.status_code == 401:
+                logger.error("SerpAPI Key Invalid or Unauthorized (401).")
+                return "❌ SerpAPI Error: Unauthorized or Invalid API Key (401)."
             if response.status_code == 403:
-                logger.error("SerpAPI Key Invalid or Quota Exceeded (403).")
-                return "❌ SerpAPI Error: Invalid Key or Quota Exceeded."
+                logger.error("SerpAPI Key Forbidden or Quota Exceeded (403).")
+                return "❌ SerpAPI Error: Invalid Key or Quota Exceeded (403)."
+            if response.status_code == 429:
+                logger.error("SerpAPI Rate Limit or Quota Exceeded (429).")
+                return "❌ SerpAPI Error: Rate Limit or Monthly Quota Exceeded (429)."
             
             if response.status_code != 200:
                 logger.error(f"SerpAPI Failed with status: {response.status_code}")

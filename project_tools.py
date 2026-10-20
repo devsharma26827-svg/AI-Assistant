@@ -37,11 +37,8 @@ async def get_project_status(project_name: str = None) -> str:
     Arguments:
     - project_name: Optional specific project title. If empty, lists all.
     """
-    if project_name:
-        # Find specific (need to implement specific fetch in memory or iter here)
-        # For now, let's use the summary for all if not easy to fetch one, 
-        # but better to provide detail for one.
-        pass # Implementation logic below is better
+    if project_name and project_name.strip():
+        return memory.get_project_detail(project_name.strip())
     
     return memory.get_projects_summary()
 
