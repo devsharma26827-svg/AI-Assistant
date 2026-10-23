@@ -45,3 +45,6 @@ python-Levenshtein
 # Testing
 pytest
 pytest-asyncio
+
+# YouTube metadata search
+yt-dlp

@@ -6,7 +6,7 @@ Cynthia is a low-latency, real-time voice-driven AI assistant for your Windows l
 
 ## Overview
 
-Cynthia combines responsive vocal interaction with local system control. She maintains a warm, helpful, emotionally aware, and gently confident female persona. Whether communicating via Hinglish or English, Cynthia remembers details, learns user habits, writes text/code, manages files, and interfaces directly with your Windows OS, screen vision tools, and external APIs.
+Cynthia combines responsive vocal interaction with local system control. She maintains a warm, helpful, emotionally aware, and gently confident female persona. Whether communicating via Hinglish or English, Cynthia remembers details, learns user habits, writes text/code, manages files, and interfaces directly with your Windows OS, screen vision tools, YouTube media playback, and external APIs.
 
 ---
 
@@ -15,6 +15,7 @@ Cynthia combines responsive vocal interaction with local system control. She mai
 * **Real-Time Vocal Interaction**: Fast, natural two-way voice communication using LiveKit WebRTC channels and Gemini's Live Realtime audio streaming.
 * **Smart Key & Model Rotation**: Manages multiple Gemini API keys and automatically rotates across keys on quota/rate limits (429) and falls back across verified model names on unsupported model errors.
 * **Independent Screen Vision**: Captures the active Windows desktop with Pillow and analyzes screen context, locates UI buttons/elements, and checks for error popups using Google's modern `google-genai` SDK with dedicated vision models (`GEMINI_VISION_MODEL`), completely independent from the realtime voice model.
+* **YouTube Video & Song Playback**: Plays requested songs and videos in the default web browser via metadata-only resolution (`yt-dlp`), searches for video topics, and discovers creator channels without downloading any files or requiring paid YouTube API keys.
 * **Persistent Dynamic Memory**: Structured, local file-based memory store (`memory.json`) tracking user profiles, life phases, hobbies, habits, projects, and emotional states.
 * **Deep Windows System Control**: Adjusts volume and screen brightness, arranges desktop windows, captures screenshots, opens/closes applications, runs shell commands, and manages files and folders.
 * **Desktop Automation**: Navigates GUI apps using keyboard shortcuts, mouse clicks, and typing.
@@ -35,9 +36,10 @@ graph TD
     B -->|Gemini Live Bidirectional Audio| C["LiveKit Realtime Model (gemini-3.1-flash-live-preview)"]
     B -->|Tool Invocations (TOOL_MODE=core / full)| D["Active Root Tool Modules (*_tools.py)"]
     D -->|Screen Capture & Vision Analysis| E["Gemini Vision Engine (google-genai / gemini-3.5-flash-lite)"]
-    D -->|Key Rotation & Fallback Handling| F["Gemini Key Manager (gemini_key_manager.py)"]
-    D -->|Local OS APIs & Automation| G["Windows OS (pywin32, pycaw, PyAutoGUI, WMI)"]
-    D -->|Read / Write State| H["JSON Memory Store (memory_store.py -> memory.json)"]
+    D -->|YouTube Playback & Search| F["YouTube Engine (youtube_tools.py / yt-dlp / browser)"]
+    D -->|Key Rotation & Fallback Handling| G["Gemini Key Manager (gemini_key_manager.py)"]
+    D -->|Local OS APIs & Automation| H["Windows OS (pywin32, pycaw, PyAutoGUI, WMI)"]
+    D -->|Read / Write State| I["JSON Memory Store (memory_store.py -> memory.json)"]
 ```
 
 ### Active Implementation Modules
@@ -46,6 +48,7 @@ The active runtime application is comprised of the root-level Python modules imp
 - `agent.py`: Master LiveKit Voice Agent entrypoint coordinating sessions, voice options, and tool registries.
 - `gemini_key_manager.py`: Key rotation, cooldown tracking, sanitized logging, and model fallback management.
 - `vision_tools.py`: Screen capture (`Pillow`), JPEG downscaling, and image analysis using `google-genai`.
+- `youtube_tools.py`: Fast, metadata-only video/song playback, video search, and channel search in the default web browser.
 - `memory_store.py`: Local JSON memory persistence controller.
 - `system_control_tools.py`: Windows volume, brightness, process management, screenshot capture, and shell execution.
 - `file_manager_tools.py` & `project_tools.py`: Local file I/O and task/project tracking.
@@ -66,6 +69,7 @@ The active runtime application is comprised of the root-level Python modules imp
 * **Live Audio Model**: `livekit-plugins-google` (`google.beta.realtime.RealtimeModel`)
 * **Vision & Text AI**: `google-genai` (Google's official GenAI SDK)
 * **Screen Capture & Imaging**: `Pillow` (PIL)
+* **YouTube Metadata**: `yt-dlp` (metadata search only, no downloading)
 * **Desktop Automation**: `pywin32`, `pycaw`, `screen-brightness-control`, `PyAutoGUI`, `PyGetWindow`, `psutil`
 * **Translation**: `deep-translator`
 * **Search & APIs**: SerpAPI (`requests`), OpenWeatherMap
@@ -79,7 +83,7 @@ The active runtime application is comprised of the root-level Python modules imp
 ├── .github/                   # GitHub Action workflows and issue templates
 ├── services/                  # Older reference copies (not imported by agent.py)
 ├── src/                       # Older reference copies (not imported by agent.py)
-├── tests/                     # Automated pytest test suites (vision, keys, memory, system)
+├── tests/                     # Automated pytest test suites (vision, YouTube, keys, memory, system)
 ├── utils/                     # System control helper utilities
 ├── agent.py                   # Main LiveKit Voice Agent entrypoint
 ├── gemini_key_manager.py      # Gemini API key and model fallback manager
@@ -90,6 +94,7 @@ The active runtime application is comprised of the root-level Python modules imp
 ├── run_assistant_console.bat  # Windows voice launcher
 ├── run_assistant_text.bat     # Windows text-only debug launcher
 ├── vision_tools.py            # Screen capture & image understanding tools
+├── youtube_tools.py           # YouTube video/song playback, video search, and channel search
 └── .env.local.example         # Environment template
 ```
 
@@ -144,7 +149,7 @@ The assistant reads `.env.local` on startup. Key configuration settings include:
 | `GEMINI_VISION_MODEL` | Optional | Primary model used for screen capture & image understanding | `gemini-3.5-flash-lite` |
 | `GEMINI_VISION_FALLBACK_MODEL` | Optional | Fallback model if primary vision model returns 404/unsupported | `gemini-flash-lite-latest` |
 | `GEMINI_VISION_TIMEOUT` | Optional | Per-request timeout in seconds for Gemini vision API calls | `15` |
-| `TOOL_MODE` | Optional | Tool loading footprint: `core` (27 core tools, fast) or `full` (56 tools including Vision & Workflows) | `core` (set to `full` to enable Vision) |
+| `TOOL_MODE` | Optional | Tool loading footprint: `core` (30 core tools including YouTube, fast) or `full` (59 tools including Vision & Workflows) | `core` |
 | `ASSISTANT_NAME` | Optional | Voice assistant name | `Cynthia` |
 | `ASSISTANT_VOICE` | Optional | LiveKit TTS voice profile | `Aoede` |
 | `PLAY_STARTUP_SOUND` | Optional | Non-blocking startup sound | `false` |
@@ -187,6 +192,33 @@ When enabled, you can say:
 - *"Check if there are any error dialogs on screen."*
 - *"Summarize what app is open right now."*
 
+### 4. YouTube Voice Commands
+YouTube tools are part of `CORE_TOOLS` and work out-of-the-box in both `TOOL_MODE=core` and `TOOL_MODE=full`:
+- *"Cynthia, YouTube pe Arijit Singh ka Tum Hi Ho song chalao."* (Resolves & plays top video)
+- *"Play the Interstellar theme on YouTube."* (Resolves & plays top video)
+- *"YouTube pe Python tutorials search karo."* (Opens video search results)
+- *"CarryMinati ka channel search karo."* (Opens channel-filtered results)
+
+---
+
+## YouTube Integration (Voice-Controlled Playback & Search)
+
+Cynthia integrates YouTube playback and search directly into the default Windows web browser without downloading media files or constructing arbitrary shell commands:
+
+### Tools & Behaviors
+1. **`youtube_play_video(query)`**: Uses `yt-dlp` in flat metadata-only mode to find the best match and opens its direct watch page (`https://www.youtube.com/watch?v=...`) in your default browser. Never downloads media to disk. Falls back safely to search results if direct resolution is unavailable.
+2. **`youtube_search_videos(query)`**: Opens YouTube search results (`https://www.youtube.com/results?search_query=...`) without automatically selecting or playing a video.
+3. **`youtube_search_channels(channel_name)`**: Opens channel-filtered search results (`sp=EgIQAg%253D%253D`) to discover creator channels without confusing them with individual videos or guessing unverified handles.
+
+### Dependencies & Setup
+- Powered by `yt-dlp` (included in `requirement.txt`).
+- **No Paid API Key Needed**: Operates without a YouTube Data API v3 key or quota limits.
+- **Browser Playback**: Videos open in your default browser. Autoplay behavior follows your browser's media permission settings.
+
+### Known Limitations
+- Requires an active internet connection.
+- Autoplay depends on your browser's autoplay policies.
+
 ---
 
 ## Automated Testing
@@ -196,6 +228,7 @@ Run the full pytest test suite from the activated virtual environment:
 .\venv311\Scripts\pytest tests
 ```
 The test suite covers:
+- YouTube playback resolution, video search, channel search, and fallback handling
 - Screen capture, downscaling, and image passing to Gemini models
 - Key rotation and cooldown handling across 429 quota limits
 - Automatic fallback across unsupported models (404)
