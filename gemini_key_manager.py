@@ -4,6 +4,7 @@ Rotates and manages multiple Gemini API keys to prevent rate limits (429)
 and handles automatic model fallbacks across active key configurations.
 """
 import os
+import re
 import time
 import logging
 from dotenv import load_dotenv
@@ -14,7 +15,7 @@ logger.setLevel(logging.INFO)
 class GeminiKeyManager:
     def __init__(self):
         load_dotenv(".env")
-        load_dotenv(".env.local")
+        load_dotenv(".env.local", override=True)
         
         # Parse multiple keys based on comma separated string or multiple keys ending with number
         self.api_keys = []
@@ -66,6 +67,14 @@ class GeminiKeyManager:
             return "***"
         return f"...{key[-4:]}"
 
+    @staticmethod
+    def _sanitize_error(error) -> str:
+        """Sanitizes error text so full API keys are never exposed in logs."""
+        msg = str(error)
+        msg = re.sub(r"AIza[0-9A-Za-z-_]{20,}", "[REDACTED_KEY]", msg)
+        msg = re.sub(r"AQ\.[0-9A-Za-z-_\.]{40,}", "[REDACTED_KEY]", msg)
+        return msg
+
     def get_current_key(self) -> str:
         return self.api_keys[self.current_index]
 
@@ -77,7 +86,6 @@ class GeminiKeyManager:
     @staticmethod
     def _parse_retry_delay(error_text: str, default: float = 30.0) -> float:
         """Pulls Google's suggested retry delay out of a 429 message."""
-        import re
         m = re.search(r"retry in ([\d.]+)s", error_text, re.IGNORECASE)
         if m:
             try:
@@ -102,13 +110,12 @@ class GeminiKeyManager:
         """
         Executes a Gemini API call (action_func) with Key and Model rotation.
         - action_func: A lambda/function that takes (api_key, model_name) returns response.
-        - fallback_models: List of model strings (e.g. ['gemini-2.0-flash', 'gemini-1.5-pro']).
+        - fallback_models: List of model strings (e.g. ['gemini-3.5-flash-lite', 'gemini-flash-lite-latest']).
         """
         if fallback_models is None:
             fallback_models = [
-                "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", 
-                "gemini-2.0-flash-lite-001", "gemini-flash-latest", 
-                "gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"
+                "gemini-3.5-flash-lite", "gemini-flash-lite-latest", 
+                "gemini-3.8-flash", "gemini-flash-latest", "gemini-2.5-flash"
             ]
             
         total_keys = len(self.api_keys)
@@ -143,20 +150,30 @@ class GeminiKeyManager:
                 except Exception as e:
                     error_msg = str(e).lower()
                     
-                    # 1. Check Model unsupported (404, not found, not supported)
-                    is_model_error = any(term in error_msg for term in ["404", "not found", "not supported"])
+                    # 1. Check Model unsupported (404, not found, not supported, is no longer available)
+                    is_model_error = any(term in error_msg for term in ["404", "not found", "not supported", "is no longer available"])
                     if is_model_error:
                         if model_index < len(fallback_models) - 1:
                             logger.warning(f"Model {model_name} unsupported. Falling back to next model...")
                             continue # Try next model
                         else:
-                            logger.error(f"All fallback models failed for this key. Last err: {e}")
+                            logger.error(f"All fallback models failed for this key. Last err: {self._sanitize_error(e)}")
                             # If all models fail, we shouldn't necessarily rotate key for a model error, but let's break loop to raise
                             raise e
 
-                    # 2. Check Rate Limit / Quota
-                    is_rate_limit = any(term in error_msg for term in ["429", "quota", "exhausted", "too many requests", "deadline", "503", "504", "overloaded"])
-                    
+                    # 2. Check Auth / Permission error (401, 403, api_key_invalid, unauthenticated)
+                    is_auth_error = any(term in error_msg for term in ["api_key_invalid", "401", "403", "permission denied", "unauthenticated", "invalid api key"])
+                    if is_auth_error:
+                        logger.warning(f"Authentication/permission error on key {self._mask_key(current_key)}: {self._sanitize_error(e)}")
+                        if total_keys > 1 and attempts < max_total_attempts - 1:
+                            self._rotate_key()
+                            attempts += 1
+                            break # Try next key
+                        else:
+                            raise e
+
+                    # 3. Check Rate Limit / Quota
+                    is_rate_limit = any(term in error_msg for term in ["429", "quota", "exhausted", "too many requests"])
                     if is_rate_limit:
                         # Park this key for a cooldown window so parallel/later
                         # calls don't immediately hammer it again.
@@ -171,9 +188,23 @@ class GeminiKeyManager:
                             self._rotate_key()
                         attempts += 1
                         break # Break inner model loop to restart outer key loop with new key
+
+                    # 4. Check Transient Server / Network Error (503, 504, overloaded, deadline, timeout)
+                    is_transient = any(term in error_msg for term in ["503", "504", "deadline", "overloaded", "unavailable", "timed out", "timeout"])
+                    if is_transient:
+                        if model_index < len(fallback_models) - 1:
+                            logger.warning(f"Model {model_name} transient failure ({self._sanitize_error(e)}). Trying next fallback model...")
+                            continue
+                        elif total_keys > 1 and attempts < max_total_attempts - 1:
+                            logger.warning(f"Transient server error on key {self._mask_key(current_key)}. Trying next key...")
+                            self._rotate_key()
+                            attempts += 1
+                            break
+                        else:
+                            raise e
                     
-                    # 3. Hard Errors
-                    logger.error(f"API Error (Not rate limit/model): {e}")
+                    # 5. Hard Errors
+                    logger.error(f"API Error (Not rate limit/model): {self._sanitize_error(e)}")
                     raise e
                     
         raise Exception("All API keys and models exhausted or max retries reached.")

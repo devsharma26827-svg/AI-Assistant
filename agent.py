@@ -18,7 +18,7 @@ from livekit.plugins import (
 from gemini_key_manager import gemini_key_manager
 import google.genai.types as genai_types
 
-load_dotenv(".env.local")
+load_dotenv(".env.local", override=True)
 
 # Pre-warm the SSL default context in a background thread as soon as this
 # module loads. Without this, the first Gemini connection pays a ~500ms

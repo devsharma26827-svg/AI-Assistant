@@ -41,3 +41,7 @@ pillow
 # Fuzzy matching
 fuzzywuzzy
 python-Levenshtein
+
+# Testing
+pytest
+pytest-asyncio
