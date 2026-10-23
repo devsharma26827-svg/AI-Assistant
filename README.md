@@ -89,7 +89,7 @@ Note: `services/` and `src/` contain earlier, parallel copies of some tool files
 1. **Clone the Repository**:
    ```bash
    git clone https://github.com/your-username/femle-best-friend.git
-   cd femle-best-friend
+   cd AI-Assistant
    ```
 
 2. **Initialize a Virtual Environment**:
