@@ -1,9 +1,13 @@
 """
 YouTube Tools for Cynthia AI Assistant.
-Provides safe, metadata-only video/song playback, video search, and channel search in the default web browser.
-Does NOT download any media files to disk or construct arbitrary shell commands.
+Provides safe, metadata-only video/song playback, video search, channel search,
+and headless background playback controls (pause, resume, seek, next, previous, status)
+via Windows Global System Media Transport Controls (GSMTC).
+Does NOT download any media files to disk, construct arbitrary shell commands,
+or steal keyboard/window focus from active applications.
 """
 import asyncio
+import datetime
 import logging
 import re
 import urllib.parse
@@ -21,6 +25,32 @@ try:
     _YT_DLP_INSTALLED = True
 except ImportError:
     logger.warning("yt-dlp is not installed. Direct video resolution will fall back to YouTube search.")
+
+# Global flag for WinRT Windows Media Control (GSMTC)
+_WINSDK_INSTALLED = False
+try:
+    from winsdk.windows.media.control import (
+        GlobalSystemMediaTransportControlsSessionManager,
+        GlobalSystemMediaTransportControlsSessionPlaybackStatus,
+    )
+    _WINSDK_INSTALLED = True
+except (ImportError, AttributeError):
+    logger.warning("winsdk is not installed or not supported on this platform. Windows media session controls will be unavailable.")
+
+
+# Common browser & YouTube identifiers in Windows GSMTC SourceAppUserModelId
+BROWSER_APP_KEYWORDS = (
+    "youtube",
+    "chrome",
+    "msedge",
+    "edge",
+    "firefox",
+    "brave",
+    "opera",
+    "vivaldi",
+    "arc",
+    "browser",
+)
 
 
 def _clean_query(query: str) -> str:
@@ -204,3 +234,363 @@ async def youtube_search_channels(channel_name: str) -> str:
         return f"✅ Boss, '{clean_name}' ke channel results YouTube par open kar diye hain."
     else:
         return "❌ Browser mein YouTube channel search open karne mein error aaya."
+
+
+# ---------------------------------------------------------------------------
+# Background YouTube / Browser Playback Controls via Windows GSMTC
+# ---------------------------------------------------------------------------
+
+def _format_duration(seconds: float) -> str:
+    """Formats a duration in seconds into M:SS or H:MM:SS (standard YouTube player style)."""
+    secs = int(max(0, round(seconds)))
+    hrs = secs // 3600
+    mins = (secs % 3600) // 60
+    rem_secs = secs % 60
+    if hrs > 0:
+        return f"{hrs}:{mins:02d}:{rem_secs:02d}"
+    return f"{mins}:{rem_secs:02d}"
+
+
+async def _get_youtube_media_session():
+    """
+    Finds the active media session for YouTube or a supported web browser
+    using Windows Global System Media Transport Controls (GSMTC).
+    Does NOT steal window focus or simulate global keyboard presses.
+    """
+    if not _WINSDK_INSTALLED:
+        return None
+
+    try:
+        mgr = await GlobalSystemMediaTransportControlsSessionManager.request_async()
+        if not mgr:
+            return None
+
+        # 1. Prioritize current active session if it matches a browser or YouTube
+        current = mgr.get_current_session()
+        if current:
+            app_id = (current.source_app_user_model_id or "").lower()
+            if any(k in app_id for k in BROWSER_APP_KEYWORDS):
+                return current
+
+        # 2. Inspect all active sessions
+        sessions = mgr.get_sessions()
+        if not sessions:
+            return current
+
+        # A) Explicit YouTube session (AppId contains "youtube")
+        for s in sessions:
+            app_id = (s.source_app_user_model_id or "").lower()
+            if "youtube" in app_id:
+                return s
+
+        # B) Browser session that is currently PLAYING
+        for s in sessions:
+            app_id = (s.source_app_user_model_id or "").lower()
+            if any(k in app_id for k in BROWSER_APP_KEYWORDS):
+                info = s.get_playback_info()
+                if info and info.playback_status == GlobalSystemMediaTransportControlsSessionPlaybackStatus.PLAYING:
+                    return s
+
+        # C) Browser session that is currently PAUSED
+        for s in sessions:
+            app_id = (s.source_app_user_model_id or "").lower()
+            if any(k in app_id for k in BROWSER_APP_KEYWORDS):
+                info = s.get_playback_info()
+                if info and info.playback_status == GlobalSystemMediaTransportControlsSessionPlaybackStatus.PAUSED:
+                    return s
+
+        # D) Any session matching browser keywords
+        for s in sessions:
+            app_id = (s.source_app_user_model_id or "").lower()
+            if any(k in app_id for k in BROWSER_APP_KEYWORDS):
+                return s
+
+        # E) Return current session if present
+        return current
+    except Exception as e:
+        logger.error(f"Error querying Windows media session: {e}")
+        return None
+
+
+async def _get_session_title(session) -> str:
+    """Helper to extract media title from a GSMTC session."""
+    if not session:
+        return ""
+    try:
+        props = await session.try_get_media_properties_async()
+        if props and props.title:
+            return props.title.strip()
+    except Exception as e:
+        logger.debug(f"Could not read media properties title: {e}")
+    return ""
+
+
+@function_tool
+async def youtube_pause_playback() -> str:
+    """
+    Pauses currently playing YouTube video, song, or browser media in the background without switching windows or stealing focus.
+    
+    Use this when the user asks to PAUSE playback:
+    - "YouTube pause karo"
+    - "Song pause karo"
+    - "Video pause karo"
+    - "YouTube ko band nahi, bas pause karo"
+    - "Roko", "pause"
+    
+    Do NOT use this to close or stop an application.
+    """
+    if not _WINSDK_INSTALLED:
+        return "❌ Boss, background playback control ke liye 'winsdk' library zaroori hai. Kripya 'pip install winsdk' karein."
+
+    session = await _get_youtube_media_session()
+    if not session:
+        return "ℹ Boss, koi active YouTube playback ya browser media session nahi mila. Kripya pehle browser mein YouTube video start karein."
+
+    try:
+        info = session.get_playback_info()
+        title = await _get_session_title(session)
+        display_name = f"'{title}'" if title else "YouTube video"
+
+        if info and info.playback_status == GlobalSystemMediaTransportControlsSessionPlaybackStatus.PAUSED:
+            return f"Boss, {display_name} pehle se hi paused hai."
+
+        success = await session.try_pause_async()
+        if success:
+            return f"✅ Boss, {display_name} pause kar diya hai."
+        else:
+            return f"❌ Boss, {display_name} pause nahi ho paya. Browser media controls allow hone chahiye."
+    except Exception as e:
+        logger.error(f"Error pausing playback: {e}")
+        return f"❌ Playback pause karne mein error aaya: {e}"
+
+
+@function_tool
+async def youtube_resume_playback() -> str:
+    """
+    Resumes or unpauses the currently paused YouTube video, song, or browser media in the background without switching windows.
+    
+    Use this when the user asks to RESUME, PLAY, or UNPAUSE an existing paused video:
+    - "Song play karo" / "Song resume karo"
+    - "Video resume karo" / "YouTube resume karo"
+    - "YouTube chalao" (when video is already open/paused, NOT searching for a new song)
+    - "Unpause karo", "continue karo"
+    
+    Do NOT use this if the user asks to search or play a BRAND NEW song/title.
+    """
+    if not _WINSDK_INSTALLED:
+        return "❌ Boss, background playback control ke liye 'winsdk' library zaroori hai. Kripya 'pip install winsdk' karein."
+
+    session = await _get_youtube_media_session()
+    if not session:
+        return "ℹ Boss, koi active YouTube playback ya browser media session nahi mila. Kripya pehle browser mein YouTube video open karein."
+
+    try:
+        info = session.get_playback_info()
+        title = await _get_session_title(session)
+        display_name = f"'{title}'" if title else "YouTube video"
+
+        if info and info.playback_status == GlobalSystemMediaTransportControlsSessionPlaybackStatus.PLAYING:
+            return f"Boss, {display_name} pehle se hi chal rahi hai."
+
+        success = await session.try_play_async()
+        if success:
+            return f"✅ Boss, {display_name} resume kar diya hai."
+        else:
+            return f"❌ Boss, {display_name} resume nahi ho paya."
+    except Exception as e:
+        logger.error(f"Error resuming playback: {e}")
+        return f"❌ Playback resume karne mein error aaya: {e}"
+
+
+@function_tool
+async def youtube_seek_playback(seconds: int = 10, direction: str = "forward") -> str:
+    """
+    Seeks forward or backward in the currently playing YouTube video by a specific number of seconds in the background.
+    
+    Parameters:
+    - seconds: Number of seconds to jump (e.g. 10, 20, 30, 45, 60 for 1 minute, 120 for 2 minutes).
+    - direction: "forward" (default, "aage", "skip") or "backward" ("peeche", "back", "rewind").
+    
+    Use this when the user asks to SKIP, JUMP, FORWARD, or REWIND time in the current video:
+    - "10 second aage karo" -> seconds=10, direction="forward"
+    - "20 seconds skip karo" -> seconds=20, direction="forward"
+    - "30 second forward karo" -> seconds=30, direction="forward"
+    - "Is video ko 45 seconds aage kar do" -> seconds=45, direction="forward"
+    - "Ek minute aage skip karo" -> seconds=60, direction="forward"
+    - "10 second peeche karo" -> seconds=10, direction="backward"
+    - "20 seconds rewind karo" -> seconds=20, direction="backward"
+    - "30 second back jao" -> seconds=30, direction="backward"
+    - "Ek minute rewind karo" -> seconds=60, direction="backward"
+    
+    Do NOT confuse this with searching for a new video or playing a new song!
+    """
+    if not _WINSDK_INSTALLED:
+        return "❌ Boss, background playback control ke liye 'winsdk' library zaroori hai. Kripya 'pip install winsdk' karein."
+
+    try:
+        dur = int(seconds)
+    except (ValueError, TypeError):
+        return "❌ Error: Seek duration valid number honi chahiye."
+
+    if dur <= 0:
+        return "❌ Error: Seek duration 0 se zyada honi chahiye."
+
+    dir_clean = (direction or "forward").strip().lower()
+    if dir_clean in {"backward", "back", "rewind", "peeche", "peche", "reverse"}:
+        delta = -dur
+        dir_label = "peeche"
+    else:
+        delta = dur
+        dir_label = "aage"
+
+    session = await _get_youtube_media_session()
+    if not session:
+        return "ℹ Boss, koi active YouTube playback ya browser media session nahi mila."
+
+    try:
+        timeline = session.get_timeline_properties()
+        if not timeline or timeline.position is None:
+            return "❌ Boss, video ki current timeline read nahi ho saki. Browser mein media controls support hona zaroori hai."
+
+        current_sec = timeline.position.total_seconds()
+        min_sec = timeline.min_seek_time.total_seconds() if (timeline and timeline.min_seek_time) else 0.0
+        max_sec = 0.0
+        if timeline and timeline.max_seek_time and timeline.max_seek_time.total_seconds() > 0:
+            max_sec = timeline.max_seek_time.total_seconds()
+        elif timeline and timeline.end_time and timeline.end_time.total_seconds() > 0:
+            max_sec = timeline.end_time.total_seconds()
+
+        target_sec = current_sec + delta
+        if max_sec > 0:
+            target_sec = max(min_sec, min(max_sec, target_sec))
+        else:
+            target_sec = max(min_sec, target_sec)
+
+        # 100-nanosecond ticks for Windows TimeSpan
+        ticks = int(target_sec * 10_000_000)
+        success = await session.try_change_playback_position_async(ticks)
+
+        if success:
+            pos_str = _format_duration(target_sec)
+            dur_str = f" / {_format_duration(max_sec)}" if max_sec > 0 else ""
+            return f"✅ Boss, video {dur} second {dir_label} kar diya hai ({pos_str}{dur_str} par)."
+        else:
+            return "❌ Boss, YouTube video position change karne mein error aaya."
+    except Exception as e:
+        logger.error(f"Error seeking playback: {e}")
+        return f"❌ Seek karne mein error aaya: {e}"
+
+
+@function_tool
+async def youtube_next_video() -> str:
+    """
+    Skips to the next video or track in the current YouTube playlist or queue in the background.
+    
+    Use this when the user asks to skip to the NEXT video:
+    - "Isko next video par le jao"
+    - "Next song chalao"
+    - "Agla video lagao"
+    - "Skip to next"
+    """
+    if not _WINSDK_INSTALLED:
+        return "❌ Boss, background playback control ke liye 'winsdk' library zaroori hai. Kripya 'pip install winsdk' karein."
+
+    session = await _get_youtube_media_session()
+    if not session:
+        return "ℹ Boss, koi active YouTube playback ya browser media session nahi mila."
+
+    try:
+        success = await session.try_skip_next_async()
+        if success:
+            return "✅ Boss, agle video/song par skip kar diya hai."
+        else:
+            return "❌ Boss, next video par skip karne ki koshish fail hui."
+    except Exception as e:
+        logger.error(f"Error skipping next: {e}")
+        return f"❌ Next video par jane mein error aaya: {e}"
+
+
+@function_tool
+async def youtube_previous_video() -> str:
+    """
+    Skips to the previous video or track in the current YouTube playlist or queue in the background.
+    
+    Use this when the user asks to go back to the PREVIOUS video:
+    - "Previous video chalao"
+    - "Pichla song lagao"
+    - "Pichle video par jao"
+    - "Play previous"
+    """
+    if not _WINSDK_INSTALLED:
+        return "❌ Boss, background playback control ke liye 'winsdk' library zaroori hai. Kripya 'pip install winsdk' karein."
+
+    session = await _get_youtube_media_session()
+    if not session:
+        return "ℹ Boss, koi active YouTube playback ya browser media session nahi mila."
+
+    try:
+        success = await session.try_skip_previous_async()
+        if success:
+            return "✅ Boss, pichle video/song par skip kar diya hai."
+        else:
+            return "❌ Boss, previous video par skip karne ki koshish fail hui."
+    except Exception as e:
+        logger.error(f"Error skipping previous: {e}")
+        return f"❌ Previous video par jane mein error aaya: {e}"
+
+
+@function_tool
+async def youtube_get_playback_status() -> str:
+    """
+    Checks and returns the current YouTube playback state, title, artist, and time position in the background.
+    
+    Use this when the user asks about current media status:
+    - "Kaunsa song chal raha hai?"
+    - "YouTube par kya chal raha hai?"
+    - "Video kitni bachi hai?"
+    - "What is currently playing?"
+    """
+    if not _WINSDK_INSTALLED:
+        return "❌ Boss, background playback control ke liye 'winsdk' library zaroori hai. Kripya 'pip install winsdk' karein."
+
+    session = await _get_youtube_media_session()
+    if not session:
+        return "ℹ Boss, abhi koi YouTube ya browser media playback active nahi hai."
+
+    try:
+        info = session.get_playback_info()
+        status_name = "Unknown"
+        if info:
+            if info.playback_status == GlobalSystemMediaTransportControlsSessionPlaybackStatus.PLAYING:
+                status_name = "Playing"
+            elif info.playback_status == GlobalSystemMediaTransportControlsSessionPlaybackStatus.PAUSED:
+                status_name = "Paused"
+            elif info.playback_status == GlobalSystemMediaTransportControlsSessionPlaybackStatus.STOPPED:
+                status_name = "Stopped"
+
+        props = await session.try_get_media_properties_async()
+        title = props.title.strip() if props and props.title else "Unknown Title"
+        artist = props.artist.strip() if props and props.artist else ""
+
+        timeline = session.get_timeline_properties()
+        pos_str = ""
+        dur_str = ""
+        if timeline and timeline.position is not None:
+            pos_str = _format_duration(timeline.position.total_seconds())
+            max_sec = 0.0
+            if timeline.max_seek_time and timeline.max_seek_time.total_seconds() > 0:
+                max_sec = timeline.max_seek_time.total_seconds()
+            elif timeline.end_time and timeline.end_time.total_seconds() > 0:
+                max_sec = timeline.end_time.total_seconds()
+            if max_sec > 0:
+                dur_str = f" / {_format_duration(max_sec)}"
+
+        time_part = f" [{pos_str}{dur_str}]" if pos_str else ""
+        artist_part = f" by {artist}" if artist else ""
+
+        icon = "🎵" if status_name == "Playing" else ("⏸" if status_name == "Paused" else "⏹")
+        return f"{icon} Boss, YouTube: '{title}'{artist_part} - Status: {status_name}{time_part}"
+    except Exception as e:
+        logger.error(f"Error getting playback status: {e}")
+        return f"❌ Playback status lene mein error aaya: {e}"
+

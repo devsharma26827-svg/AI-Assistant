@@ -105,7 +105,17 @@ from vision_tools import analyze_screen, detect_ui_element, detect_error_popups,
 from reply_intelligence_tools import smart_auto_reply, auto_reply_decision
 from workflow_tools import create_workflow, list_workflows, trigger_workflow
 from human_computer_tools import human_click_element, human_type_text, human_press_shortcut, human_scroll
-from youtube_tools import youtube_play_video, youtube_search_videos, youtube_search_channels
+from youtube_tools import (
+    youtube_play_video,
+    youtube_search_videos,
+    youtube_search_channels,
+    youtube_pause_playback,
+    youtube_resume_playback,
+    youtube_seek_playback,
+    youtube_next_video,
+    youtube_previous_video,
+    youtube_get_playback_status,
+)
 
 # -----------------------------------------------------------------------
 # Tool footprint control (see note near session.tools below for why this
@@ -130,6 +140,8 @@ CORE_TOOLS = [
     set_system_volume, set_screen_brightness,
     run_shell_command, run_code_file,
     youtube_play_video, youtube_search_videos, youtube_search_channels,
+    youtube_pause_playback, youtube_resume_playback, youtube_seek_playback,
+    youtube_next_video, youtube_previous_video, youtube_get_playback_status,
 ]
 
 EXTENDED_TOOLS = [

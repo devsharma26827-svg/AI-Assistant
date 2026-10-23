@@ -48,7 +48,7 @@ The active runtime application is comprised of the root-level Python modules imp
 - `agent.py`: Master LiveKit Voice Agent entrypoint coordinating sessions, voice options, and tool registries.
 - `gemini_key_manager.py`: Key rotation, cooldown tracking, sanitized logging, and model fallback management.
 - `vision_tools.py`: Screen capture (`Pillow`), JPEG downscaling, and image analysis using `google-genai`.
-- `youtube_tools.py`: Fast, metadata-only video/song playback, video search, and channel search in the default web browser.
+- `youtube_tools.py`: Fast, metadata-only video/song playback, video search, channel search, and background media playback controls via Windows GSMTC.
 - `memory_store.py`: Local JSON memory persistence controller.
 - `system_control_tools.py`: Windows volume, brightness, process management, screenshot capture, and shell execution.
 - `file_manager_tools.py` & `project_tools.py`: Local file I/O and task/project tracking.
@@ -69,7 +69,7 @@ The active runtime application is comprised of the root-level Python modules imp
 * **Live Audio Model**: `livekit-plugins-google` (`google.beta.realtime.RealtimeModel`)
 * **Vision & Text AI**: `google-genai` (Google's official GenAI SDK)
 * **Screen Capture & Imaging**: `Pillow` (PIL)
-* **YouTube Metadata**: `yt-dlp` (metadata search only, no downloading)
+* **YouTube & Media Controls**: `yt-dlp` (metadata search only, no downloading), `winsdk` (Windows GSMTC background playback control)
 * **Desktop Automation**: `pywin32`, `pycaw`, `screen-brightness-control`, `PyAutoGUI`, `PyGetWindow`, `psutil`
 * **Translation**: `deep-translator`
 * **Search & APIs**: SerpAPI (`requests`), OpenWeatherMap
@@ -94,7 +94,7 @@ The active runtime application is comprised of the root-level Python modules imp
 ├── run_assistant_console.bat  # Windows voice launcher
 ├── run_assistant_text.bat     # Windows text-only debug launcher
 ├── vision_tools.py            # Screen capture & image understanding tools
-├── youtube_tools.py           # YouTube video/song playback, video search, and channel search
+├── youtube_tools.py           # YouTube playback, search, and background media controls
 └── .env.local.example         # Environment template
 ```
 
@@ -201,23 +201,54 @@ YouTube tools are part of `CORE_TOOLS` and work out-of-the-box in both `TOOL_MOD
 
 ---
 
-## YouTube Integration (Voice-Controlled Playback & Search)
+## YouTube Integration (Voice-Controlled Playback, Search & Background Controls)
 
-Cynthia integrates YouTube playback and search directly into the default Windows web browser without downloading media files or constructing arbitrary shell commands:
+Cynthia integrates YouTube playback, search, and headless background media controls directly in Windows without downloading media files, constructing arbitrary shell commands, or stealing keyboard/window focus:
 
 ### Tools & Behaviors
+
+#### 1. Launch & Search Tools
 1. **`youtube_play_video(query)`**: Uses `yt-dlp` in flat metadata-only mode to find the best match and opens its direct watch page (`https://www.youtube.com/watch?v=...`) in your default browser. Never downloads media to disk. Falls back safely to search results if direct resolution is unavailable.
 2. **`youtube_search_videos(query)`**: Opens YouTube search results (`https://www.youtube.com/results?search_query=...`) without automatically selecting or playing a video.
 3. **`youtube_search_channels(channel_name)`**: Opens channel-filtered search results (`sp=EgIQAg%253D%253D`) to discover creator channels without confusing them with individual videos or guessing unverified handles.
 
+#### 2. Background Playback Control Tools (Windows GSMTC)
+4. **`youtube_pause_playback()`**: Pauses currently playing YouTube video or browser media in the background without switching active windows or interrupting work in VS Code.
+5. **`youtube_resume_playback()`**: Resumes/unpauses the existing video without restarting or searching.
+6. **`youtube_seek_playback(seconds, direction)`**: Seeks relative position forward (`"forward"`, `"aage"`) or backward (`"backward"`, `"peeche"`) by arbitrary durations (e.g. 10s, 20s, 30s, 45s, 60s/1 min). Clamps safely within video timeline bounds `[min_seek, max_seek]`.
+7. **`youtube_next_video()`**: Skips to the next video or track in the queue or playlist.
+8. **`youtube_previous_video()`**: Skips to the previous video or track in the queue.
+9. **`youtube_get_playback_status()`**: Returns current playback state (Playing / Paused), video title, artist/channel, and position/duration timestamp.
+
+### Voice Command Examples
+
+| Category | Example Voice Commands (Hindi / Hinglish / English) | Tool Invoked |
+| -------- | --------------------------------------------------- | ------------ |
+| **Play Video / Song** | *"YouTube pe Arijit Singh ka Tum Hi Ho song chalao"*<br>*"Play Interstellar theme on YouTube"* | `youtube_play_video` |
+| **Search Videos** | *"YouTube pe React JS tutorials search karo"*<br>*"Lo-fi study music dhoondo YouTube par"* | `youtube_search_videos` |
+| **Search Channel** | *"CarryMinati ka channel search karo"*<br>*"Find NASA official channel on YouTube"* | `youtube_search_channels` |
+| **Pause Playback** | *"Cynthia, YouTube pause karo"*<br>*"Song pause kar do"*<br>*"YouTube ko band nahi, bas pause karo"* | `youtube_pause_playback` |
+| **Resume Playback** | *"Song play karo"*<br>*"Video resume karo"*<br>*"YouTube playback continue karo"* | `youtube_resume_playback` |
+| **Seek Forward** | *"10 second aage karo"*<br>*"20 seconds skip karo"*<br>*"Is video ko 45 seconds aage kar do"*<br>*"Ek minute aage skip karo"* | `youtube_seek_playback(seconds, "forward")` |
+| **Seek Backward** | *"10 second peeche karo"*<br>*"20 seconds rewind karo"*<br>*"30 second back jao"*<br>*"Ek minute rewind karo"* | `youtube_seek_playback(seconds, "backward")` |
+| **Next / Previous** | *"Isko next video par le jao"*<br>*"Previous video chalao"* | `youtube_next_video` / `youtube_previous_video` |
+| **Check Status** | *"Kaunsa song chal raha hai?"*<br>*"YouTube par kya chal raha hai?"* | `youtube_get_playback_status` |
+
+### Background Control Architecture (No Focus Stealing)
+Background media controls are powered by Windows Runtime **Global System Media Transport Controls (GSMTC)** via `winsdk`.
+- **Zero Window Interference**: You can actively type code in VS Code, browse files, or write documents without Cynthia switching focus, minimizing windows, or stealing keyboard input.
+- **No Fragile Keystrokes**: Unlike simulators that press Space or arrow keys (which type into active text editors), GSMTC controls media at the OS kernel/transport level.
+- **Browser Compatibility**: Works with Microsoft Edge, Google Chrome, Mozilla Firefox, Brave, Opera, and Vivaldi (standard Media Session API enabled by default).
+
 ### Dependencies & Setup
-- Powered by `yt-dlp` (included in `requirement.txt`).
+- Powered by `yt-dlp` (metadata search) and `winsdk` (Windows GSMTC control), both listed in `requirement.txt`.
 - **No Paid API Key Needed**: Operates without a YouTube Data API v3 key or quota limits.
 - **Browser Playback**: Videos open in your default browser. Autoplay behavior follows your browser's media permission settings.
 
 ### Known Limitations
 - Requires an active internet connection.
 - Autoplay depends on your browser's autoplay policies.
+- Background playback controls require the browser to support and enable media sessions (default in modern browsers).
 
 ---
 
