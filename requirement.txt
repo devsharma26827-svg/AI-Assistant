@@ -49,3 +49,4 @@ pytest-asyncio
 # YouTube metadata search
 yt-dlp
 winsdk
+spotipy

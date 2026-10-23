@@ -82,3 +82,7 @@ voice_data/**/*.wav
 .calendars/
 .checkpoints/
 memory.json*.bak
+
+*.db
+*.bak
+generated_websites/

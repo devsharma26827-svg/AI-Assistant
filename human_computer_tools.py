@@ -50,6 +50,15 @@ async def human_click_element(target_description: str) -> str:
     """
     logger.info(f"Attempting to human-click: {target_description}")
     
+    # Safety Check: Consequential or destructive actions require explicit confirmation
+    destructive_keywords = {"delete", "format", "purchase", "pay", "buy", "checkout", "permanently remove", "wipe", "drop database"}
+    desc_lower = target_description.lower()
+    if any(k in desc_lower for k in destructive_keywords) and not desc_lower.startswith("confirmed"):
+        return (
+            f"⛔ SAFETY BLOCK: '{target_description}' ek consequential/destructive action lagta hai.\n"
+            f"Kya aap sach mein ise click karna chahte hain? Agar haan, to 'Proceed' ya 'Confirmed: {target_description}' bolein."
+        )
+    
     # Get current screen size
     screen_width, screen_height = pyautogui.size()
     

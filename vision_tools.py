@@ -204,3 +204,23 @@ async def summarize_screen_state() -> str:
         "Instruction: Keep it structured and concise. No more than 3 bullet points."
     )
     return await _get_gemini_vision_response(prompt)
+
+
+@function_tool
+async def read_screen_text(region: str = "full") -> str:
+    """
+    Extracts and reads visible text from the current screen using high-accuracy vision OCR,
+    preserving indentation, code snippets, numbers, and layout formatting.
+    
+    Parameters:
+    - region: 'full' (entire screen) or descriptive area (e.g. 'terminal', 'active editor', 'dialog box').
+    """
+    logger.info(f"Extracting screen text with region: {region}")
+    prompt = (
+        f"Extract all readable text from this screen capture (focus area: {region}).\n"
+        "Instruction: Transcribe the visible text accurately. "
+        "Preserve code indentation, line breaks, file names, and error tracebacks. "
+        "If text is unreadable or blurry, explicitly mention that. "
+        "Do not hallucinate or summarize — return the raw extracted text."
+    )
+    return await _get_gemini_vision_response(prompt)

@@ -91,7 +91,7 @@ from system_control_tools import (
     take_screenshot, set_volume, get_battery_status, get_connected_devices,
     create_system_folder, create_system_file, run_shell_command, run_code_file
 )
-from whatsapp_tools import whatsapp_message
+from whatsapp_tools import whatsapp_message, whatsapp_open_chat, whatsapp_draft_message, whatsapp_search_chat, whatsapp_call
 from content_writer_tools import write_text, write_code
 
 from memory_store import memory
@@ -99,9 +99,9 @@ from intelligence_tools import remember_fact, forget_fact, update_emotional_stat
 from file_manager_tools import save_file_as, open_current_file
 from translation_tools import translate_text, translate_document, set_language_mode
 from project_tools import create_project, add_task_to_project, get_project_status, update_task_status
-from environment_tools import set_system_volume, set_screen_brightness, activate_mode, get_environment_state
+from environment_tools import set_system_volume, set_screen_brightness, activate_mode, get_environment_state, get_system_volume, adjust_system_volume, mute_system_volume, get_screen_brightness, adjust_screen_brightness
 from learning_tools import manage_self_learning
-from vision_tools import analyze_screen, detect_ui_element, detect_error_popups, summarize_screen_state
+from vision_tools import analyze_screen, detect_ui_element, detect_error_popups, summarize_screen_state, read_screen_text
 from reply_intelligence_tools import smart_auto_reply, auto_reply_decision
 from workflow_tools import create_workflow, list_workflows, trigger_workflow
 from human_computer_tools import human_click_element, human_type_text, human_press_shortcut, human_scroll
@@ -116,6 +116,15 @@ from youtube_tools import (
     youtube_previous_video,
     youtube_get_playback_status,
 )
+from empathy_tools import adapt_conversational_tone
+from code_assistant_tools import explain_code, analyze_error_and_suggest_fix, apply_code_fix, generate_unit_tests, read_clipboard_text, solve_coding_problem
+from website_builder_tools import build_website_template, preview_website
+from power_tools import power_shutdown, power_restart, power_sleep, power_hibernate, power_cancel_scheduled_shutdown, power_get_status
+from support_ticket_tools import create_support_ticket, list_support_tickets, get_support_ticket, update_ticket_status
+from email_tools import draft_email, get_email_draft, send_email
+from spotify_tools import spotify_search, spotify_play, spotify_playback_control, spotify_get_status
+from network_tools import get_wifi_status, list_wifi_networks, list_saved_wifi_profiles, connect_wifi_profile, disconnect_wifi
+from defender_tools import get_defender_status, run_defender_quick_scan, scan_file_with_defender, get_defender_threats
 
 # -----------------------------------------------------------------------
 # Tool footprint control (see note near session.tools below for why this
@@ -142,6 +151,16 @@ CORE_TOOLS = [
     youtube_play_video, youtube_search_videos, youtube_search_channels,
     youtube_pause_playback, youtube_resume_playback, youtube_seek_playback,
     youtube_next_video, youtube_previous_video, youtube_get_playback_status,
+    whatsapp_open_chat, whatsapp_draft_message, whatsapp_search_chat, whatsapp_call,
+    get_system_volume, adjust_system_volume, mute_system_volume, get_screen_brightness, adjust_screen_brightness,
+    adapt_conversational_tone,
+    explain_code, analyze_error_and_suggest_fix, apply_code_fix, read_clipboard_text, solve_coding_problem,
+    build_website_template, preview_website,
+    power_shutdown, power_restart, power_sleep, power_hibernate, power_cancel_scheduled_shutdown, power_get_status,
+    create_support_ticket, list_support_tickets, get_support_ticket, update_ticket_status,
+    draft_email, get_email_draft, send_email,
+    spotify_search, spotify_play, spotify_playback_control, spotify_get_status,
+    get_wifi_status, list_wifi_networks, list_saved_wifi_profiles, connect_wifi_profile, disconnect_wifi,
 ]
 
 EXTENDED_TOOLS = [
@@ -154,6 +173,8 @@ EXTENDED_TOOLS = [
     analyze_screen, detect_ui_element, detect_error_popups, summarize_screen_state,
     create_workflow, list_workflows, trigger_workflow,
     human_click_element, human_type_text, human_press_shortcut, human_scroll,
+    generate_unit_tests, read_screen_text,
+    get_defender_status, run_defender_quick_scan, scan_file_with_defender, get_defender_threats,
 ]
 
 ACTIVE_TOOLS = CORE_TOOLS + EXTENDED_TOOLS if TOOL_MODE == "full" else CORE_TOOLS
@@ -250,7 +271,7 @@ async def my_agent(ctx: agents.JobContext):
     # Reduces the time JARVIS waits after you stop speaking from 800ms+ down to 400ms
     fast_vad_config = genai_types.RealtimeInputConfig(
         automatic_activity_detection=genai_types.AutomaticActivityDetection(
-            silence_duration_ms=400 
+            silence_duration_ms=int(os.getenv("VAD_SILENCE_DURATION_MS", "500")) 
         )
     )
 

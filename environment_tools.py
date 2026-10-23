@@ -41,8 +41,51 @@ try:
                 CoUninitialize()
             except Exception:
                 pass
+
+    def _get_volume() -> tuple[int, bool]:
+        CoInitialize()
+        try:
+            speakers = AudioUtilities.GetSpeakers()
+            if not speakers:
+                return 50, False
+            dev = speakers if hasattr(speakers, "Activate") else getattr(speakers, "_dev", speakers)
+            if not dev:
+                return 50, False
+            interface = dev.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+            volume = interface.QueryInterface(IAudioEndpointVolume)
+            cur = round(volume.GetMasterVolumeLevelScalar() * 100)
+            mute = bool(volume.GetMute())
+            return cur, mute
+        finally:
+            try:
+                CoUninitialize()
+            except Exception:
+                pass
+
+    def _set_mute(mute: bool) -> bool:
+        CoInitialize()
+        try:
+            speakers = AudioUtilities.GetSpeakers()
+            if not speakers:
+                return False
+            dev = speakers if hasattr(speakers, "Activate") else getattr(speakers, "_dev", speakers)
+            if not dev:
+                return False
+            interface = dev.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+            volume = interface.QueryInterface(IAudioEndpointVolume)
+            volume.SetMute(1 if mute else 0, None)
+            return True
+        finally:
+            try:
+                CoUninitialize()
+            except Exception:
+                pass
 except ImportError:
     logger.error("PyCAW not found. Volume control will fail.")
+    def _get_volume() -> tuple[int, bool]:
+        return 50, False
+    def _set_mute(mute: bool) -> bool:
+        return False
     def _set_volume(level_percent: int):
         return False
 
@@ -80,6 +123,99 @@ async def set_screen_brightness(level: int) -> str:
         return f"✅ Brightness set to {level}%."
     except Exception as e:
         return f"❌ Failed to set brightness ({level}%): {e}. Note: External monitors or some laptop displays do not support DDC/CI software brightness control."
+
+
+@function_tool
+async def get_system_volume() -> str:
+    """
+    Reads and reports the current system master volume percentage and mute status.
+    """
+    import asyncio
+    try:
+        vol, muted = await asyncio.to_thread(_get_volume)
+        mute_status = " (Muted)" if muted else ""
+        return f"🔊 Current system volume: {vol}%{mute_status}."
+    except Exception as e:
+        logger.error(f"get_system_volume failed: {e}")
+        return f"❌ Volume read error: {e}"
+
+
+@function_tool
+async def adjust_system_volume(delta_percent: int) -> str:
+    """
+    Increases or decreases system volume by a relative percentage (e.g. +10, -20).
+    """
+    import asyncio
+    try:
+        current_vol, _ = await asyncio.to_thread(_get_volume)
+        new_vol = max(0, min(100, current_vol + int(delta_percent)))
+        success = await asyncio.to_thread(_set_volume, new_vol)
+        if success:
+            direction = "badha" if delta_percent > 0 else "kam kar"
+            return f"✅ Volume {abs(delta_percent)}% {direction} diya hai (ab {new_vol}% par hai)."
+        return "❌ Volume adjust karne mein error aaya."
+    except Exception as e:
+        logger.error(f"adjust_system_volume failed: {e}")
+        return f"❌ Error adjusting volume: {e}"
+
+
+@function_tool
+async def mute_system_volume(mute: bool = True) -> str:
+    """
+    Mutes or unmutes the system master audio.
+    """
+    import asyncio
+    try:
+        success = await asyncio.to_thread(_set_mute, mute)
+        if success:
+            action = "mute" if mute else "unmute"
+            return f"✅ System audio {action} kar diya hai."
+        return "❌ Audio mute/unmute control failed."
+    except Exception as e:
+        logger.error(f"mute_system_volume failed: {e}")
+        return f"❌ Error toggling mute: {e}"
+
+
+@function_tool
+async def get_screen_brightness() -> str:
+    """
+    Reads and reports the current primary display brightness percentage.
+    """
+    import asyncio
+    try:
+        brightness_list = await asyncio.to_thread(sbc.get_brightness)
+        if brightness_list and isinstance(brightness_list, list):
+            b_val = brightness_list[0]
+            return f"🔆 Current screen brightness: {b_val}%."
+        elif isinstance(brightness_list, int):
+            return f"🔆 Current screen brightness: {brightness_list}%."
+        return "ℹ Screen brightness read nahi ho saki (display DDC/CI unsupported ho sakta hai)."
+    except Exception as e:
+        logger.error(f"get_screen_brightness failed: {e}")
+        return f"❌ Brightness check error: {e}. Note: External monitors may not support DDC/CI."
+
+
+@function_tool
+async def adjust_screen_brightness(delta_percent: int) -> str:
+    """
+    Increases or decreases screen brightness by a relative percentage (e.g. +20, -15).
+    """
+    import asyncio
+    try:
+        brightness_list = await asyncio.to_thread(sbc.get_brightness)
+        current_b = 50
+        if brightness_list and isinstance(brightness_list, list):
+            current_b = brightness_list[0]
+        elif isinstance(brightness_list, int):
+            current_b = brightness_list
+
+        new_b = max(0, min(100, current_b + int(delta_percent)))
+        await asyncio.to_thread(sbc.set_brightness, new_b)
+        direction = "badha" if delta_percent > 0 else "kam kar"
+        return f"✅ Brightness {abs(delta_percent)}% {direction} di hai (ab {new_b}% par hai)."
+    except Exception as e:
+        logger.error(f"adjust_screen_brightness failed: {e}")
+        return f"❌ Error adjusting brightness: {e}."
 
 @function_tool
 async def activate_mode(mode_name: str) -> str:

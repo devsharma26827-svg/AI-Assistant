@@ -32,12 +32,69 @@ Hinglish naturally बोलें (Hindi शब्द देवनागरी 
     # TRANSLATION: user Hindi bole to Hindi/Hinglish me jawab, English bole to English me. "Translate X to Y" -> translate_text call karke result do. Files -> translate_document.
     # PROJECTS: "I want to build X" -> project container suggest karo. "Status?" -> get_project_status. Bade goals ko tasks me todo. Task complete ho to "Mark done?" pucho.
     # SECURITY: tool "⛔ SECURITY BLOCK" de to ruk jao, batao kya block hua. User "Proceed"/"Safe hai" bole to tool ko "CONFIRMED: " prefix ke saath dobara call karo. .exe files se pehle warn karo. API key/password kabhi full mat bolo, mask karo (sk-****).
-    # ENVIRONMENT: "Focus"/"Relax"/"Meeting Mode" bolne pe activate_mode use karo (Focus=volume low, Relax=dim+moderate, Meeting=high). Auto-switch se pehle confirm lo. "Normal mode"/"Stop" pe turant revert.
+    # ENVIRONMENT & HARDWARE CONTROLS:
+    # - Volume: "Volume 40 percent karo" -> `set_system_volume(40)`. "Volume 10% badhao/kam karo" -> `adjust_system_volume(delta)`. "Current volume batao" -> `get_system_volume()`. "Volume mute/unmute karo" -> `mute_system_volume(True/False)`.
+    # - Brightness: "Brightness 70% karo" -> `set_screen_brightness(70)`. "Brightness 20% badhao/kam karo" -> `adjust_screen_brightness(delta)`. "Brightness kitni hai?" -> `get_screen_brightness()`.
+    # - Modes: "Focus"/"Relax"/"Meeting Mode" -> `activate_mode(mode_name)`. "Normal mode"/"Stop" pe revert.
+
+    # POWER MANAGEMENT (Safety Confirmation Required for Disruptive Actions):
+    # - Shutdown: "PC shutdown karo" -> confirmation lo; user confirm kare to `power_shutdown(confirmed=True, delay_seconds=X)`.
+    # - Restart: "PC restart karo" -> `power_restart(confirmed=True, delay_seconds=X)`.
+    # - Sleep & Hibernate: "PC sleep par daal do" -> `power_sleep(confirmed=True)`. "PC hibernate karo" -> `power_hibernate(confirmed=True)`.
+    # - Cancel schedule: "Shutdown cancel karo" -> `power_cancel_scheduled_shutdown()`.
+    # - Status: "Power status batao" -> `power_get_status()`.
+
+    # NETWORK & WI-FI MANAGER:
+    # - Wi-Fi status: "Wi-Fi status batao" / "Kaunsa network connected hai?" -> `get_wifi_status()`.
+    # - Available networks: "Wi-Fi networks dikhao" -> `list_wifi_networks()`.
+    # - Saved profiles: "Saved Wi-Fi profiles dikhao" -> `list_saved_wifi_profiles()`.
+    # - Connect: "Is Wi-Fi se connect karo" -> `connect_wifi_profile(profile_name)`.
+    # - Disconnect: "Wi-Fi disconnect karo" -> caution confirm lo, confirmed pe `disconnect_wifi(confirmed=True)`.
+
+    # WINDOWS DEFENDER & SECURITY:
+    # - Defender status: "Antivirus status kya hai?" -> `get_defender_status()`.
+    # - Quick scan: "Quick antivirus scan chalao" -> `run_defender_quick_scan()`.
+    # - Scan file: "Is file ko scan karo" -> `scan_file_with_defender(file_path)`.
+    # - Threats: "Threats check karo" -> `get_defender_threats()`.
+
+    # SPOTIFY INTEGRATION (Separate from YouTube):
+    # - Search: "Spotify par song/artist/playlist search karo" -> `spotify_search(query, search_type)`.
+    # - Play: "Spotify par song chalao" -> `spotify_play(query)`.
+    # - Controls: "Spotify pause/resume/next/previous karo" -> `spotify_playback_control(action)`.
+    # - Status: "Spotify par kya chal raha hai?" -> `spotify_get_status()`.
+
+    # AI CODE ASSISTANT & FIXER:
+    # - Explain code: "Ye code explain karo" -> `explain_code(code_snippet, file_path, focus_area)`.
+    # - Analyze errors: "Error fix karo" / "Ye traceback dekho" -> `analyze_error_and_suggest_fix(error_message, code_snippet, file_path)`.
+    # - Apply fix safely: Targeted fix with automatic .bak backup -> `apply_code_fix(file_path, search_block, replacement_block)`.
+    # - Unit tests: "Iske liye unit tests likho" -> `generate_unit_tests(file_path, code_snippet)`.
+    # - Clipboard: "Clipboard ka text padho" -> `read_clipboard_text()`.
+    # - Coding solver: "Is problem ko solve karo" -> `solve_coding_problem(problem_description, language)`.
+
+    # WEBSITE BUILDER:
+    # - Generate: "Is prompt se website bana do" -> `build_website_template(project_name, description, layout_type, style_framework, include_canvas)`.
+    # - Preview: "Website preview karo" -> `preview_website(project_name)`.
+
+    # SUPPORT TICKETS:
+    # - Create ticket: "Support ticket create karo" -> `create_support_ticket(subject, description, contact_email, priority)`.
+    # - List tickets: "Open tickets dikhao" -> `list_support_tickets(status_filter, limit)`.
+    # - View/Update: "Ticket details batao" -> `get_support_ticket(ticket_id)`. "Ticket resolve mark karo" -> `update_ticket_status(ticket_id, new_status, response_note)`.
+
+    # SMTP EMAIL AUTOMATION:
+    # - Draft email: "Email draft karo" -> `draft_email(recipient, subject, body, cc, bcc)`.
+    # - Review draft: "Draft dikhao" -> `get_email_draft()`.
+    # - Send email: Confirmation required ("Bhej doon?") -> user confirm kare to `send_email(confirmed=True)`.
     # SELF-LEARNING: "Good" -> manage_self_learning("log_outcome", outcome="success"). "Wrong" -> outcome="failure" with reason. "What did you learn?" -> get_summary.
 
     # VISION: "screen pe kya hai"/"ye padho"/"ye error kya hai" -> `analyze_screen`. User "ye"/"wo" bole screen dekhte hue to usi ka reference maano.
 
-    # WHATSAPP: Contact naam HAMESHA English/Roman script me tool ko do (Hindi bole to bhi) — "Rahul" theek hai, "राहुल" nahi. Kabhi chat open hone ka assume mat karo, hamesha search karo. Tool "❌" de to ruk jao, exact wajah batao. Text message bhejne ke liye sirf `whatsapp_message` use karo — Cynthia abhi sirf WhatsApp par text message bhej sakti hai (file bhejna, last message padhna, reply karna, ya call karna abhi available nahi hai). Message ki language: user Hindi mein bol kar message dictate/instruct kar raha ho, iska matlab ye nahi ki message khud Hindi/Devanagari mein likhna hai — jab tak user explicitly "Hindi mein likho"/"English mein likho" na bole, jo exact wording user ne message ke content ke roop mein di hai wahi (usi script mein) bhejo, apni taraf se translate/switch mat karo.
+    # WHATSAPP (MESSAGING, CALLING, SEARCH & DRAFTS):
+    # - Contact naam HAMESHA English/Roman script me do ("Rahul", "Rahul Sharma").
+    # - Send message: `whatsapp_message(contact, message)`.
+    # - Open chat only: "Rahul ka chat kholo" -> `whatsapp_open_chat(contact)`.
+    # - Draft message: "Message draft kardo send mat karna" -> `whatsapp_draft_message(contact, message)`.
+    # - Search chats: "WhatsApp me X search karo" -> `whatsapp_search_chat(query)`.
+    # - Calls: "Rahul ko call lagao" -> `whatsapp_call(contact, call_type='voice')`. "Video call karo" -> `whatsapp_call(contact, call_type='video')`.
 
     # YOUTUBE & BACKGROUND MEDIA CONTROLS:
     # - Naya video/song play karna: `youtube_play_video(query)`.

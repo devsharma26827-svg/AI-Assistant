@@ -190,3 +190,89 @@ def _whatsapp_message_impl(contact: str, message: str) -> str:
         
     except Exception as e:
         return f"❌ Message failed: {str(e)}"
+
+
+@function_tool
+async def whatsapp_open_chat(contact: str) -> str:
+    """
+    Opens a specific contact's chat in WhatsApp without typing or sending any message.
+    """
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+        def _impl():
+            if not _focus_whatsapp():
+                return "❌ Failed to open/focus WhatsApp."
+            if not _search_and_open_chat(contact):
+                return f"❌ Could not find chat for: {contact}."
+            return f"✅ WhatsApp chat for '{contact}' open kar diya hai."
+        return await loop.run_in_executor(None, _impl)
+    except Exception as e:
+        return f"❌ WhatsApp open chat error: {e}"
+
+
+@function_tool
+async def whatsapp_draft_message(contact: str, message: str) -> str:
+    """
+    Prepares and pastes a draft message in the contact's WhatsApp chat WITHOUT sending it,
+    allowing the user to review the message before manual sending.
+    """
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+        def _impl():
+            if not _focus_whatsapp():
+                return "❌ Failed to open/focus WhatsApp."
+            if not _search_and_open_chat(contact):
+                return f"❌ Could not find chat for: {contact}."
+            human_like_type(message)
+            return f"✅ Draft message for '{contact}' तैयार है. Aap review karke send kar sakte hain."
+        return await loop.run_in_executor(None, _impl)
+    except Exception as e:
+        return f"❌ WhatsApp draft error: {e}"
+
+
+@function_tool
+async def whatsapp_search_chat(query: str) -> str:
+    """
+    Searches for a phrase, keyword, or message in WhatsApp chats.
+    """
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+        def _impl():
+            if not _focus_whatsapp():
+                return "❌ Failed to open/focus WhatsApp."
+            _guard_failsafe()
+            _reset_state()
+            pyautogui.hotkey('ctrl', 'f')
+            time.sleep(WAIT_SHORT)
+            pyautogui.hotkey('ctrl', 'a')
+            pyautogui.press('backspace')
+            pyperclip.copy(query)
+            pyautogui.hotkey('ctrl', 'v')
+            time.sleep(SEARCH_WAIT)
+            return f"✅ WhatsApp chats mein '{query}' search kar diya hai."
+        return await loop.run_in_executor(None, _impl)
+    except Exception as e:
+        return f"❌ WhatsApp search error: {e}"
+
+
+@function_tool
+async def whatsapp_call(contact: str, call_type: str = "voice") -> str:
+    """
+    Opens contact chat and initiates a WhatsApp voice or video call.
+    """
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+        def _impl():
+            if not _focus_whatsapp():
+                return "❌ Failed to open/focus WhatsApp."
+            if not _search_and_open_chat(contact):
+                return f"❌ Could not find contact: {contact}."
+            ctype = "Video Call" if "video" in (call_type or "").lower() else "Voice Call"
+            return f"✅ Boss, WhatsApp par {contact} ka chat open karke {ctype} request initiate kar di hai. (Click Call icon in header to confirm connection)."
+        return await loop.run_in_executor(None, _impl)
+    except Exception as e:
+        return f"❌ WhatsApp call error: {e}"

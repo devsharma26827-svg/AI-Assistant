@@ -49,6 +49,15 @@ The active runtime application is comprised of the root-level Python modules imp
 - `gemini_key_manager.py`: Key rotation, cooldown tracking, sanitized logging, and model fallback management.
 - `vision_tools.py`: Screen capture (`Pillow`), JPEG downscaling, and image analysis using `google-genai`.
 - `youtube_tools.py`: Fast, metadata-only video/song playback, video search, channel search, and background media playback controls via Windows GSMTC.
+- `code_assistant_tools.py`: Code explanation, error root-cause diagnosis, safe fix application with backups, clipboard reading, and coding problem solver.
+- `website_builder_tools.py`: Prompt-driven HTML5/CSS/JS website template generator with canvas and browser preview.
+- `power_tools.py`: Windows shutdown, restart, sleep, hibernate, scheduling, and cancellation with safety confirmations.
+- `network_tools.py`: Wi-Fi connection status, nearby network discovery, and profile manager via Windows netsh.
+- `defender_tools.py`: Windows Defender status, quick scan, and file scanner.
+- `email_tools.py`: SMTP email drafting, review, and confirmed sending via TLS/STARTTLS.
+- `support_ticket_tools.py`: Local SQLite support ticket persistence and lifecycle management.
+- `spotify_tools.py`: Spotify tracks, albums, playlists searching and playback controls.
+- `empathy_tools.py`: Conversational tone adaptation and pacing guidance.
 - `memory_store.py`: Local JSON memory persistence controller.
 - `system_control_tools.py`: Windows volume, brightness, process management, screenshot capture, and shell execution.
 - `file_manager_tools.py` & `project_tools.py`: Local file I/O and task/project tracking.
@@ -249,6 +258,124 @@ Background media controls are powered by Windows Runtime **Global System Media T
 - Requires an active internet connection.
 - Autoplay depends on your browser's autoplay policies.
 - Background playback controls require the browser to support and enable media sessions (default in modern browsers).
+
+---
+
+## Expanded Assistant Capabilities
+
+Cynthia includes 13 core and extended capability modules designed specifically for a complete Windows desktop experience:
+
+### 1. Empathy Voice Conversations (`empathy_tools.py`)
+- Adapts speaking tone, verbosity, and pacing based on conversational cues (`stressed`, `frustrated`, `uncertain`, `sad`, `excited`, `calm`).
+- Configurable VAD pause detection (`VAD_SILENCE_DURATION_MS`) prevents cutting off thinking pauses.
+- Transient empathy adjustments avoid hallucinating permanent facts in user memory.
+
+### 2. AI Code Fixer, Builder & Explainer (`code_assistant_tools.py`)
+- **Code Explanation**: Explains code structures, control flows, APIs, and dependencies line-by-line (`explain_code`).
+- **Error Diagnosis**: Analyzes stack traces, clipboard snippets, or screen errors to pinpoint files and root causes (`analyze_error_and_suggest_fix`).
+- **Safe Fix Application**: Automatically creates a timestamped `.bak` backup before applying targeted code edits (`apply_code_fix`).
+- **Coding Problem Solver**: Step-by-step algorithms, time/space complexity analysis, and clean solutions (`solve_coding_problem`).
+- **Clipboard Reader**: Non-destructive text inspection via `pyperclip` (`read_clipboard_text`).
+- **Unit Test Scaffolding**: Generates test cases covering edge cases and exceptions (`generate_unit_tests`).
+
+### 3. AI Website Template Builder (`website_builder_tools.py`)
+- Generates complete, responsive multi-section websites in dedicated project directories under `generated_websites/<name>/` (`build_website_template`).
+- Outputs semantic HTML5 (`index.html`), responsive CSS Flexbox/Grid (`style.css`), and interactive JavaScript (`app.js`).
+- Supports optional HTML5 Canvas animations and Tailwind CSS CDN.
+- One-click / voice preview in browser (`preview_website`).
+
+### 4. WhatsApp Automation (`whatsapp_tools.py`)
+- **Messaging**: Send text messages to ASCII contact names (`whatsapp_message`).
+- **Open Chat**: Open specific chat without typing or sending (`whatsapp_open_chat`).
+- **Draft Messages**: Prepare message in the input box for user review before manual sending (`whatsapp_draft_message`).
+- **Chat Search**: Search chats and message history via Ctrl+F shortcut (`whatsapp_search_chat`).
+- **Calling**: Initiate voice or video calls with clear status feedback (`whatsapp_call`).
+
+### 5. System Volume & Display Brightness Controls (`environment_tools.py`)
+- **Volume Query & Mute**: Read current master volume percentage (`get_system_volume`) and toggle mute (`mute_system_volume`).
+- **Volume Delta Adjustments**: Relative increase or decrease e.g. "Volume 10% badhao" (`adjust_system_volume`).
+- **Brightness Controls**: Query current display brightness (`get_screen_brightness`) and adjust by delta (`adjust_screen_brightness`) with DDC/CI hardware compatibility reporting.
+
+### 6. Windows Power Manager (`power_tools.py`)
+- **Shutdown & Restart with Confirmation**: Mandatory confirmation safety check before executing disruptive power commands (`power_shutdown`, `power_restart`).
+- **Sleep & Hibernate**: Instant PC low-power sleep and hibernation (`power_sleep`, `power_hibernate`).
+- **Timer Scheduling & Cancellation**: Schedule shutdown with delay in seconds and cancel pending actions with `shutdown /a` (`power_cancel_scheduled_shutdown`, `power_get_status`).
+
+### 7. OCR Screen Text Reader & Interaction Safety (`vision_tools.py`, `human_computer_tools.py`)
+- **OCR Text Reader**: High-accuracy screen text extraction preserving code formatting and indentation (`read_screen_text`).
+- **Destructive Action Safety**: Consequential actions (delete, format, purchase, pay) in `human_click_element` require explicit user confirmation.
+
+### 8. Community Support Tickets (`support_ticket_tools.py`)
+- Local SQLite persistence in `support_tickets.db`.
+- Create tickets with auto-generated IDs `TICK-XXXX`, priorities, and contact email (`create_support_ticket`).
+- List, search, inspect details, and update status (`list_support_tickets`, `get_support_ticket`, `update_ticket_status`).
+- Automatic fallback: works 100% offline if SMTP is not configured.
+
+### 9. SMTP Email Automation (`email_tools.py`)
+- **Voice Drafting**: Prepare email recipient, subject, body, CC/BCC for review (`draft_email`, `get_email_draft`).
+- **Confirmed Dispatch**: Requires explicit voice confirmation before connecting via TLS/STARTTLS (`send_email`).
+- Configurable via `.env.local` (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`).
+
+### 10. Spotify Music Integration (`spotify_tools.py`)
+- Completely decoupled from YouTube playback tools.
+- Search tracks, artists, albums, playlists (`spotify_search`).
+- Play on active Spotify Connect devices or open web player (`spotify_play`).
+- Playback controls (`spotify_playback_control`): pause, resume, next, previous, status.
+
+### 11. Windows Network Manager (`network_tools.py`)
+- Check Wi-Fi connection, SSID, signal strength (`get_wifi_status`).
+- Scan nearby visible networks (`list_wifi_networks`).
+- List saved profiles without exposing passwords (`list_saved_wifi_profiles`).
+- Connect to saved profile (`connect_wifi_profile`) and disconnect with caution confirmation (`disconnect_wifi`).
+
+### 12. Windows Defender Antivirus Scanner (`defender_tools.py`)
+- Check real-time protection and signature version (`get_defender_status`).
+- Trigger background Quick Scan (`run_defender_quick_scan`).
+- Scan specific files safely (`scan_file_with_defender`).
+- Query active and detected threat history (`get_defender_threats`).
+- Read-only & non-destructive: never disables Defender or modifies system security policies.
+
+---
+
+### Voice Command Quick Reference
+
+| Feature | Example Commands (Hindi / Hinglish / English) | Tool Invoked |
+| ------- | --------------------------------------------- | ------------ |
+| **Volume Query** | *"Current volume kitna hai?"* / *"Volume batao"* | `get_system_volume` |
+| **Volume Adjust** | *"Volume 10 percent badhao"* / *"Volume mute karo"* | `adjust_system_volume`, `mute_system_volume` |
+| **Brightness** | *"Brightness 20 percent kam karo"* / *"Brightness kitni hai?"* | `adjust_screen_brightness`, `get_screen_brightness` |
+| **Power Control** | *"PC shutdown karo"* / *"PC ko sleep par daal do"* / *"Cancel shutdown"* | `power_shutdown`, `power_sleep`, `power_cancel_scheduled_shutdown` |
+| **Wi-Fi Manager** | *"Wi-Fi networks dikhao"* / *"Kaunsa network connected hai?"* | `list_wifi_networks`, `get_wifi_status` |
+| **Antivirus Scan** | *"Quick antivirus scan chalao"* / *"Defender on hai kya?"* | `run_defender_quick_scan`, `get_defender_status` |
+| **Code Explainer** | *"Ye code explain karo"* / *"Functions samjhao"* | `explain_code` |
+| **Error Fixer** | *"Ye error fix karo"* / *"Clipboard ka error dekho"* | `analyze_error_and_suggest_fix`, `read_clipboard_text` |
+| **Website Builder** | *"Portfolio website bana do"* / *"Website preview karo"* | `build_website_template`, `preview_website` |
+| **WhatsApp Calling** | *"Rahul ko call lagao"* / *"Video call karo"* | `whatsapp_call` |
+| **WhatsApp Draft** | *"Rahul ko message draft karo, send mat karna"* | `whatsapp_draft_message` |
+| **Support Ticket** | *"Support ticket create karo"* / *"Open tickets dikhao"* | `create_support_ticket`, `list_support_tickets` |
+| **Email Compose** | *"Email draft karo"* / *"Email send karo"* | `draft_email`, `send_email` |
+| **Spotify Music** | *"Spotify par Kesariya chalao"* / *"Spotify pause karo"* | `spotify_play`, `spotify_playback_control` |
+| **Screen OCR** | *"Screen ka text read karo"* | `read_screen_text` |
+
+---
+
+### Offline vs. Online/External Services Breakdown
+
+| Feature | Offline (Local Only) | Requires External / Configured Service |
+| ------- | :------------------: | :------------------------------------: |
+| System Volume & Brightness | ✅ Yes (Local Windows APIs) | None |
+| Power Manager | ✅ Yes (Local `shutdown.exe`) | None |
+| Network (netsh) | ✅ Yes (Local Wi-Fi adapter) | None |
+| Windows Defender | ✅ Yes (Local PowerShell MpScan) | None |
+| Support Tickets | ✅ Yes (Local SQLite database) | Optional SMTP for email alerts |
+| Code Explainer & Fixer | ✅ Yes (Local file I/O & regex) | Gemini for complex semantic reasoning |
+| Website Builder | ✅ Yes (Local file generation) | None |
+| WhatsApp Automation | ✅ Yes (Desktop window automation) | Active WhatsApp application session |
+| Clipboard Reader | ✅ Yes (Local `pyperclip`) | None |
+| YouTube Playback & Controls | Background GSMTC is Local | Internet connection for video streams |
+| Spotify Integration | Web search fallback is local | Spotify Developer Client ID for Web API |
+| SMTP Email Automation | No | Configured SMTP server credentials in `.env.local` |
+| Voice RTC & Screen Vision | No | LiveKit Cloud & Google Gemini API Keys |
 
 ---
 
