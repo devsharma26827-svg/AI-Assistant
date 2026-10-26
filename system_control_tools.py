@@ -9,6 +9,7 @@ import uuid
 import win32com.client
 from fuzzywuzzy import process
 from livekit.agents import function_tool
+from tool_serializer import serialized_tool
 from ctypes import cast, POINTER, wintypes
 from comtypes import CLSCTX_ALL
 
@@ -305,7 +306,8 @@ def resolve_location(location: str) -> str:
     return _get_known_folder("desktop") or os.path.join(user_profile, "Desktop")
 
 @function_tool
-async def create_system_folder(folder_name: str, location: str = "Desktop") -> str:
+@serialized_tool("create_system_folder")
+async def create_system_folder(folder_name: str, location: str = "Desktop", step: int = 1, total_steps: int = 1) -> str:
     """
     Creates a new folder at the specified location.
     
@@ -327,7 +329,8 @@ async def create_system_folder(folder_name: str, location: str = "Desktop") -> s
         return f"❌ Failed to create folder: {e}"
 
 @function_tool
-async def create_system_file(file_name: str, content: str = "", location: str = "Desktop") -> str:
+@serialized_tool("create_system_file")
+async def create_system_file(file_name: str, content: str = "", location: str = "Desktop", step: int = 1, total_steps: int = 1) -> str:
     """
     Creates a new file with optional text content at the specified location.
     
@@ -435,7 +438,8 @@ def get_url(name: str) -> str:
 
 # App control
 @function_tool
-async def open_app(app_title: str) -> str:
+@serialized_tool("open_app")
+async def open_app(app_title: str, step: int = 1, total_steps: int = 1) -> str:
     """
     Smartly opens apps or websites based on user request.
     
@@ -523,7 +527,8 @@ def _count_windows(name: str) -> int:
 
 
 @function_tool
-async def close_app(target: str) -> str:
+@serialized_tool("close_app")
+async def close_app(target: str, step: int = 1, total_steps: int = 1) -> str:
     """
     Closes the applications window by its title or name.
     
@@ -623,7 +628,8 @@ async def folder_file(command: str) -> str:
     return "⚠ कुछ भी match नहीं हुआ।"
 
 @function_tool
-async def control_window(action: str, target: str = "current") -> str:
+@serialized_tool("control_window")
+async def control_window(action: str, target: str = "current", step: int = 1, total_steps: int = 1) -> str:
     """
     Controls window state (minimize, maximize, close, restore, focus).
 
@@ -741,7 +747,8 @@ async def control_window(action: str, target: str = "current") -> str:
     return f"⚠ Unknown action: {action}"
 
 @function_tool
-async def arrange_window(target: str, position: str) -> str:
+@serialized_tool("arrange_window")
+async def arrange_window(target: str, position: str, step: int = 1, total_steps: int = 1) -> str:
     """
     Arranges (snaps) windows to specific positions or screens.
 
@@ -837,7 +844,8 @@ async def arrange_window(target: str, position: str) -> str:
         return f"❌ Arrangement failed: {e}"
 
 @function_tool
-async def swap_windows(app1: str, app2: str) -> str:
+@serialized_tool("swap_windows")
+async def swap_windows(app1: str, app2: str, step: int = 1, total_steps: int = 1) -> str:
     """
     Swaps the position and size of two windows.
 

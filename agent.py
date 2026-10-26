@@ -20,16 +20,39 @@ import google.genai.types as genai_types
 
 load_dotenv(".env.local", override=True)
 
-# Pre-warm the SSL default context in a background thread as soon as this
-# module loads. Without this, the first Gemini connection pays a ~500ms
-# synchronous "event loop blocked" stall (seen in your logs, at ssl.py line
-# 770) the moment GenAIClient builds its own SSL context — because that's the
-# first time the certifi CA bundle gets read/parsed. Doing it here, off the
-# event loop and well before the RealtimeModel is created, means that cost is
-# already paid by the time the real connection happens.
+# Pre-warm the SSL default context with a cached wrapper in a background thread.
+# This eliminates the 683ms "event loop blocked" stall at ssl.py create_default_context
+# when the Gemini Realtime client initializes, caching the CA bundle context.
 import ssl as _ssl
 import threading as _threading
-_threading.Thread(target=_ssl.create_default_context, daemon=True).start()
+
+_orig_create_default_context = _ssl.create_default_context
+_cached_ssl_context = None
+_ssl_cache_lock = _threading.Lock()
+
+def _cached_create_default_context(*args, **kwargs):
+    global _cached_ssl_context
+    if not args and not kwargs:
+        if _cached_ssl_context is None:
+            with _ssl_cache_lock:
+                if _cached_ssl_context is None:
+                    _cached_ssl_context = _orig_create_default_context()
+        return _cached_ssl_context
+    return _orig_create_default_context(*args, **kwargs)
+
+_ssl.create_default_context = _cached_create_default_context
+
+def _warmup_background():
+    try:
+        _ssl.create_default_context()
+        try:
+            import google.genai  # noqa: F401
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+_threading.Thread(target=_warmup_background, daemon=True).start()
 
 ASSISTANT_NAME = os.getenv("ASSISTANT_NAME", "Cynthia")
 ASSISTANT_VOICE = os.getenv("ASSISTANT_VOICE", "Aoede")
@@ -92,6 +115,7 @@ from system_control_tools import (
     create_system_folder, create_system_file, run_shell_command, run_code_file
 )
 from whatsapp_tools import whatsapp_message, whatsapp_open_chat, whatsapp_draft_message, whatsapp_search_chat, whatsapp_call
+from tool_serializer import reset_tool_barrier
 from content_writer_tools import write_text, write_code
 
 from memory_store import memory
@@ -258,6 +282,7 @@ def custom_asyncio_exception_handler(loop, context):
 
 @server.rtc_session()
 async def my_agent(ctx: agents.JobContext):
+    reset_tool_barrier()
     
     # Supress annoying WinError 64 tracebacks from livekit background tasks
     loop = asyncio.get_running_loop()

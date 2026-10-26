@@ -1,6 +1,7 @@
 import logging
 import screen_brightness_control as sbc
 from livekit.agents import function_tool
+from tool_serializer import serialized_tool
 from memory_store import memory
 
 # Setup Logger
@@ -90,7 +91,8 @@ except ImportError:
         return False
 
 @function_tool
-async def set_system_volume(level: int) -> str:
+@serialized_tool("set_system_volume")
+async def set_system_volume(level: int, step: int = 1, total_steps: int = 1) -> str:
     """
     Sets the system master volume to a specific percentage (0-100).
     """
@@ -103,15 +105,16 @@ async def set_system_volume(level: int) -> str:
         success = await asyncio.to_thread(_set_volume, level)
         
         if success:
-            return f"✅ Volume set to {level}%."
+            return f"done: Volume set to {level}%."
         else:
-            return "❌ Volume control failed (Dependency missing?)."
+            return "failed: Volume control failed (Audio device or dependency missing)."
     except Exception as e:
         logger.error(f"set_system_volume failed: {e}")
         return f"❌ Error setting volume: {e}"
 
 @function_tool
-async def set_screen_brightness(level: int) -> str:
+@serialized_tool("set_screen_brightness")
+async def set_screen_brightness(level: int, step: int = 1, total_steps: int = 1) -> str:
     """
     Sets the primary screen brightness to a specific percentage (0-100).
     """
@@ -120,9 +123,9 @@ async def set_screen_brightness(level: int) -> str:
         level = max(0, min(100, int(level)))
         # Offload blocking DDC/CI call
         await asyncio.to_thread(sbc.set_brightness, level)
-        return f"✅ Brightness set to {level}%."
+        return f"done: Brightness set to {level}%."
     except Exception as e:
-        return f"❌ Failed to set brightness ({level}%): {e}. Note: External monitors or some laptop displays do not support DDC/CI software brightness control."
+        return f"failed: Failed to set brightness ({level}%): {e}. Note: External monitors or some laptop displays do not support DDC/CI software brightness control."
 
 
 @function_tool
@@ -141,7 +144,8 @@ async def get_system_volume() -> str:
 
 
 @function_tool
-async def adjust_system_volume(delta_percent: int) -> str:
+@serialized_tool("adjust_system_volume")
+async def adjust_system_volume(delta_percent: int, step: int = 1, total_steps: int = 1) -> str:
     """
     Increases or decreases system volume by a relative percentage (e.g. +10, -20).
     """
@@ -152,15 +156,16 @@ async def adjust_system_volume(delta_percent: int) -> str:
         success = await asyncio.to_thread(_set_volume, new_vol)
         if success:
             direction = "badha" if delta_percent > 0 else "kam kar"
-            return f"✅ Volume {abs(delta_percent)}% {direction} diya hai (ab {new_vol}% par hai)."
-        return "❌ Volume adjust karne mein error aaya."
+            return f"done: Volume {abs(delta_percent)}% {direction} diya hai (ab {new_vol}% par hai)."
+        return "failed: Volume adjust karne mein error aaya."
     except Exception as e:
         logger.error(f"adjust_system_volume failed: {e}")
         return f"❌ Error adjusting volume: {e}"
 
 
 @function_tool
-async def mute_system_volume(mute: bool = True) -> str:
+@serialized_tool("mute_system_volume")
+async def mute_system_volume(mute: bool = True, step: int = 1, total_steps: int = 1) -> str:
     """
     Mutes or unmutes the system master audio.
     """
@@ -169,8 +174,8 @@ async def mute_system_volume(mute: bool = True) -> str:
         success = await asyncio.to_thread(_set_mute, mute)
         if success:
             action = "mute" if mute else "unmute"
-            return f"✅ System audio {action} kar diya hai."
-        return "❌ Audio mute/unmute control failed."
+            return f"done: System audio {action} kar diya hai."
+        return "failed: Audio mute/unmute control failed."
     except Exception as e:
         logger.error(f"mute_system_volume failed: {e}")
         return f"❌ Error toggling mute: {e}"
@@ -196,7 +201,8 @@ async def get_screen_brightness() -> str:
 
 
 @function_tool
-async def adjust_screen_brightness(delta_percent: int) -> str:
+@serialized_tool("adjust_screen_brightness")
+async def adjust_screen_brightness(delta_percent: int, step: int = 1, total_steps: int = 1) -> str:
     """
     Increases or decreases screen brightness by a relative percentage (e.g. +20, -15).
     """

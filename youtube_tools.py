@@ -13,6 +13,7 @@ import re
 import urllib.parse
 import webbrowser
 from livekit.agents import function_tool
+from tool_serializer import serialized_tool
 
 # Configure logger
 logger = logging.getLogger("youtube_tools")
@@ -123,7 +124,8 @@ def _open_url_safely(url: str) -> bool:
 
 
 @function_tool
-async def youtube_play_video(query: str) -> str:
+@serialized_tool("youtube_play_video")
+async def youtube_play_video(query: str, step: int = 1, total_steps: int = 1) -> str:
     """
     Finds and plays a specific song or video on YouTube by opening its watch page in the default browser.
     
@@ -326,7 +328,8 @@ async def _get_session_title(session) -> str:
 
 
 @function_tool
-async def youtube_pause_playback() -> str:
+@serialized_tool("youtube_pause_playback")
+async def youtube_pause_playback(step: int = 1, total_steps: int = 1) -> str:
     """
     Pauses currently playing YouTube video, song, or browser media in the background without switching windows or stealing focus.
     
@@ -344,7 +347,7 @@ async def youtube_pause_playback() -> str:
 
     session = await _get_youtube_media_session()
     if not session:
-        return "ℹ Boss, koi active YouTube playback ya browser media session nahi mila. Kripya pehle browser mein YouTube video start karein."
+        return "failed: nothing is playing (koi active YouTube playback ya browser media session nahi mila)."
 
     try:
         info = session.get_playback_info()
@@ -365,7 +368,8 @@ async def youtube_pause_playback() -> str:
 
 
 @function_tool
-async def youtube_resume_playback() -> str:
+@serialized_tool("youtube_resume_playback")
+async def youtube_resume_playback(step: int = 1, total_steps: int = 1) -> str:
     """
     Resumes or unpauses the currently paused YouTube video, song, or browser media in the background without switching windows.
     
@@ -382,7 +386,7 @@ async def youtube_resume_playback() -> str:
 
     session = await _get_youtube_media_session()
     if not session:
-        return "ℹ Boss, koi active YouTube playback ya browser media session nahi mila. Kripya pehle browser mein YouTube video open karein."
+        return "failed: nothing is playing (koi active YouTube playback ya browser media session nahi mila)."
 
     try:
         info = session.get_playback_info()
@@ -403,7 +407,8 @@ async def youtube_resume_playback() -> str:
 
 
 @function_tool
-async def youtube_seek_playback(seconds: int = 10, direction: str = "forward") -> str:
+@serialized_tool("youtube_seek_playback")
+async def youtube_seek_playback(seconds: int = 10, direction: str = "forward", step: int = 1, total_steps: int = 1) -> str:
     """
     Seeks forward or backward in the currently playing YouTube video by a specific number of seconds in the background.
     
@@ -445,7 +450,7 @@ async def youtube_seek_playback(seconds: int = 10, direction: str = "forward") -
 
     session = await _get_youtube_media_session()
     if not session:
-        return "ℹ Boss, koi active YouTube playback ya browser media session nahi mila."
+        return "failed: nothing is playing (koi active YouTube playback ya browser media session nahi mila)."
 
     try:
         timeline = session.get_timeline_properties()
@@ -482,7 +487,8 @@ async def youtube_seek_playback(seconds: int = 10, direction: str = "forward") -
 
 
 @function_tool
-async def youtube_next_video() -> str:
+@serialized_tool("youtube_next_video")
+async def youtube_next_video(step: int = 1, total_steps: int = 1) -> str:
     """
     Skips to the next video or track in the current YouTube playlist or queue in the background.
     
@@ -497,7 +503,7 @@ async def youtube_next_video() -> str:
 
     session = await _get_youtube_media_session()
     if not session:
-        return "ℹ Boss, koi active YouTube playback ya browser media session nahi mila."
+        return "failed: nothing is playing (koi active YouTube playback ya browser media session nahi mila)."
 
     try:
         success = await session.try_skip_next_async()
@@ -511,7 +517,8 @@ async def youtube_next_video() -> str:
 
 
 @function_tool
-async def youtube_previous_video() -> str:
+@serialized_tool("youtube_previous_video")
+async def youtube_previous_video(step: int = 1, total_steps: int = 1) -> str:
     """
     Skips to the previous video or track in the current YouTube playlist or queue in the background.
     
@@ -526,7 +533,7 @@ async def youtube_previous_video() -> str:
 
     session = await _get_youtube_media_session()
     if not session:
-        return "ℹ Boss, koi active YouTube playback ya browser media session nahi mila."
+        return "failed: nothing is playing (koi active YouTube playback ya browser media session nahi mila)."
 
     try:
         success = await session.try_skip_previous_async()

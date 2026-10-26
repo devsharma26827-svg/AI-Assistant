@@ -3,6 +3,7 @@ import logging
 import re
 import io
 from livekit.agents import function_tool
+from tool_serializer import serialized_tool
 import pyautogui
 from PIL import ImageGrab, ImageDraw, ImageFont
 from vision_tools import _get_gemini_vision_response
@@ -40,7 +41,8 @@ def _guard_failsafe():
         logger.debug(f"failsafe guard skipped: {e}")
 
 @function_tool
-async def human_click_element(target_description: str) -> str:
+@serialized_tool("human_click_element")
+async def human_click_element(target_description: str, step: int = 1, total_steps: int = 1) -> str:
     """
     Finds a UI element on the screen by description and clicks it like a human.
     Use this to navigate GUI apps, click buttons, or select text boxes.
@@ -247,7 +249,8 @@ async def human_click_element(target_description: str) -> str:
 
 
 @function_tool
-async def human_type_text(text: str) -> str:
+@serialized_tool("human_type_text")
+async def human_type_text(text: str, step: int = 1, total_steps: int = 1) -> str:
     """
     Types text into whatever UI element currently has focus (message box, search
     bar, editor, etc.). Short text is typed out character-by-character so it
@@ -269,7 +272,8 @@ async def human_type_text(text: str) -> str:
 
 
 @function_tool
-async def human_press_shortcut(keys: str) -> str:
+@serialized_tool("human_press_shortcut")
+async def human_press_shortcut(keys: str, step: int = 1, total_steps: int = 1) -> str:
     """
     Presses a keyboard shortcut or single key (e.g., 'enter', 'tab', 'ctrl+c').
     Uses PyAutoGUI key strings.
@@ -294,7 +298,8 @@ async def human_press_shortcut(keys: str) -> str:
         return f"❌ Failed to press shortcut: {e}"
 
 @function_tool
-async def human_scroll(direction: str, amount: int = 500) -> str:
+@serialized_tool("human_scroll")
+async def human_scroll(direction: str, amount: int = 500, step: int = 1, total_steps: int = 1) -> str:
     """
     Scrolls the screen up or down.
     Use this when looking for UI elements that might be off-screen.
