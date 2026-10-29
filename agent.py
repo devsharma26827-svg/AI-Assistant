@@ -20,39 +20,49 @@ import google.genai.types as genai_types
 
 load_dotenv(".env.local", override=True)
 
-# Pre-warm the SSL default context with a cached wrapper in a background thread.
+# Pre-warm the SSL default context with a cached wrapper synchronously.
 # This eliminates the 683ms "event loop blocked" stall at ssl.py create_default_context
-# when the Gemini Realtime client initializes, caching the CA bundle context.
+# when the Gemini Realtime client initializes, caching both no-arg and certifi-specific contexts.
 import ssl as _ssl
 import threading as _threading
+import certifi
 
 _orig_create_default_context = _ssl.create_default_context
-_cached_ssl_context = None
+_ssl_cache = {}
 _ssl_cache_lock = _threading.Lock()
 
+def _make_ssl_cache_key(*args, **kwargs):
+    try:
+        kw_items = tuple(sorted((k, str(v)) for k, v in kwargs.items()))
+        return (args, kw_items)
+    except Exception:
+        return None
+
 def _cached_create_default_context(*args, **kwargs):
-    global _cached_ssl_context
-    if not args and not kwargs:
-        if _cached_ssl_context is None:
-            with _ssl_cache_lock:
-                if _cached_ssl_context is None:
-                    _cached_ssl_context = _orig_create_default_context()
-        return _cached_ssl_context
-    return _orig_create_default_context(*args, **kwargs)
+    key = _make_ssl_cache_key(*args, **kwargs)
+    if key is not None and key in _ssl_cache:
+        return _ssl_cache[key]
+    with _ssl_cache_lock:
+        if key is not None and key in _ssl_cache:
+            return _ssl_cache[key]
+        ctx = _orig_create_default_context(*args, **kwargs)
+        if key is not None:
+            _ssl_cache[key] = ctx
+        return ctx
 
 _ssl.create_default_context = _cached_create_default_context
 
-def _warmup_background():
+def _warmup_ssl_sync():
+    """Synchronously pre-warm SSL contexts so the event loop never stalls on TLS initialization."""
     try:
         _ssl.create_default_context()
-        try:
-            import google.genai  # noqa: F401
-        except Exception:
-            pass
+        cafile = os.environ.get("SSL_CERT_FILE", certifi.where())
+        capath = os.environ.get("SSL_CERT_DIR")
+        _ssl.create_default_context(cafile=cafile, capath=capath)
     except Exception:
         pass
 
-_threading.Thread(target=_warmup_background, daemon=True).start()
+_warmup_ssl_sync()
 
 ASSISTANT_NAME = os.getenv("ASSISTANT_NAME", "Cynthia")
 ASSISTANT_VOICE = os.getenv("ASSISTANT_VOICE", "Aoede")
@@ -92,6 +102,68 @@ def _realtime_voice_options() -> dict[str, str]:
 # the future, you can switch it without touching code via .env.local:
 #   GEMINI_LIVE_MODEL=whatever-the-new-model-is-called
 GEMINI_LIVE_MODEL = os.getenv("GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview").strip()
+
+from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
+from livekit.agents.voice.agent_session import CloseReason, CloseEvent
+from livekit.agents import APIConnectionError, utils, llm
+
+# Pre-warm modules to eliminate startup event loop stall warnings
+try:
+    import anyio._core._sockets
+except Exception:
+    pass
+
+class ResilientRealtimeSession(RealtimeSession):
+    """
+    Subclassed RealtimeSession providing self-healing session resumption:
+    1. Resets stale _session_resumption_handle on retry to prevent 1011 -> 1008 rejection loops.
+    2. Signals connected status to model via _report_connection_acquired.
+    3. Prevents premature timeout during high-latency mobile hotspot handshakes.
+    """
+    def _build_connect_config(self) -> genai_types.LiveConnectConfig:
+        if self._num_retries > 0:
+            logging.info(
+                f"[RESILIENCE] Reconnecting attempt #{self._num_retries}: clearing stale session_resumption handle "
+                "so Gemini server does not reject with 1008 session expired."
+            )
+            self._session_resumption_handle = None
+            self._resumption_chat_ctx = None
+        return super()._build_connect_config()
+
+    def _mark_restart_needed(self, on_error: bool = False) -> None:
+        if on_error:
+            self._session_resumption_handle = None
+            self._resumption_chat_ctx = None
+        super()._mark_restart_needed(on_error=on_error)
+
+    def _report_connection_acquired(self, acquire_time: float) -> None:
+        super()._report_connection_acquired(acquire_time)
+        if hasattr(self._realtime_model, "set_connected"):
+            self._realtime_model.set_connected()
+
+
+class ResilientRealtimeModel(RealtimeModel):
+    """
+    Subclassed RealtimeModel that instantiates ResilientRealtimeSession
+    and exposes connection readiness futures.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._connected_event = asyncio.Event()
+
+    def session(self, *, turn_detection_disabled: bool = False) -> ResilientRealtimeSession:
+        sess = ResilientRealtimeSession(self)
+        self._sessions.add(sess)
+        return sess
+
+    def set_connected(self) -> None:
+        self._connected_event.set()
+
+    def reset_connected(self) -> None:
+        self._connected_event.clear()
+
+    async def wait_for_connection(self, timeout: float = 15.0) -> None:
+        await asyncio.wait_for(self._connected_event.wait(), timeout=timeout)
 
 
 def build_agent_instructions(memory_context: str = "") -> str:
@@ -149,6 +221,15 @@ from email_tools import draft_email, get_email_draft, send_email
 from spotify_tools import spotify_search, spotify_play, spotify_playback_control, spotify_get_status
 from network_tools import get_wifi_status, list_wifi_networks, list_saved_wifi_profiles, connect_wifi_profile, disconnect_wifi
 from defender_tools import get_defender_status, run_defender_quick_scan, scan_file_with_defender, get_defender_threats
+from scheduler_tools import (
+    scheduler,
+    get_current_time,
+    schedule_reminder,
+    schedule_action,
+    list_scheduled_tasks,
+    cancel_scheduled_task,
+    resolve_missed_task,
+)
 
 # -----------------------------------------------------------------------
 # Tool footprint control (see note near session.tools below for why this
@@ -185,11 +266,12 @@ CORE_TOOLS = [
     draft_email, get_email_draft, send_email,
     spotify_search, spotify_play, spotify_playback_control, spotify_get_status,
     get_wifi_status, list_wifi_networks, list_saved_wifi_profiles, connect_wifi_profile, disconnect_wifi,
+    get_current_time, schedule_reminder, schedule_action, list_scheduled_tasks, cancel_scheduled_task, resolve_missed_task,
 ]
 
 EXTENDED_TOOLS = [
     arrange_window, swap_windows,
-    update_emotional_state, update_life_phase, learn_habit, forget_habit,
+    update_emotional_state, update_life_phase, learn_habit,
     translate_document, set_language_mode, set_communication_style,
     create_project, add_task_to_project, get_project_status, update_task_status,
     activate_mode, get_environment_state, manage_self_learning,
@@ -280,11 +362,54 @@ def custom_asyncio_exception_handler(loop, context):
     # Call default handler for everything else
     loop.default_exception_handler(context)
 
+
+async def _guarded_startup_greeting(
+    session: AgentSession,
+    model: ResilientRealtimeModel,
+    memory_context: str
+) -> None:
+    """
+    Safely plays startup greeting:
+    1. Waits up to 15s for the Realtime connection handshake to be established.
+    2. Tries generate_reply with 1 retry on timeout/error.
+    3. NEVER crashes the session if greeting fails; Cynthia stays alive and listening.
+    """
+    reply_instructions = f"Current Context: {memory_context}\n\n{REPLY_PROMPT}"
+    
+    # 1. Wait for connection readiness
+    try:
+        logging.info("Awaiting Gemini Realtime connection handshake before greeting...")
+        await model.wait_for_connection(timeout=15.0)
+        logging.info("Gemini Realtime connection handshake confirmed ready.")
+    except (asyncio.TimeoutError, Exception) as e:
+        logging.warning(f"⚠️ Did not confirm connection before greeting timeout ({e}). Skipping startup greeting.")
+        return
+
+    await asyncio.sleep(0.3)  # Brief settle window
+
+    # 2. Greeting attempt with 1 retry
+    for attempt in range(1, 3):
+        try:
+            logging.info(f"Generating startup greeting (attempt {attempt}/2)...")
+            handle = session.generate_reply(instructions=reply_instructions)
+            await asyncio.wait_for(handle, timeout=12.0)
+            if handle.exception():
+                raise handle.exception()
+            logging.info("Startup greeting completed successfully.")
+            return
+        except Exception as e:
+            logging.warning(f"⚠️ Startup greeting attempt {attempt}/2 failed: {e}")
+            if attempt == 1:
+                await asyncio.sleep(1.0)
+            else:
+                logging.warning("⚠️ Startup greeting failed after 2 attempts. Continuing session in listening mode.")
+
+
 @server.rtc_session()
 async def my_agent(ctx: agents.JobContext):
     reset_tool_barrier()
     
-    # Supress annoying WinError 64 tracebacks from livekit background tasks
+    # Suppress annoying WinError 64 tracebacks from livekit background tasks
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(custom_asyncio_exception_handler)
     
@@ -300,40 +425,133 @@ async def my_agent(ctx: agents.JobContext):
         )
     )
 
-    session = AgentSession(
-        llm=google.beta.realtime.RealtimeModel(
+    # Play startup sound BEFORE connecting to Gemini so no API deadlines are running
+    await play_startup_sound()
+
+    max_attempts = 5
+    attempt = 0
+    backoff = 1.0
+
+    # Simulation hook for Task B verification
+    simulate_crash = os.getenv("SIMULATE_REALTIME_CRASH", "").strip().lower() in ("1", "true", "yes")
+
+    shutdown_event = asyncio.Event()
+
+    async def _on_shutdown(reason: str = ""):
+        shutdown_event.set()
+        scheduler.stop()
+
+    ctx.add_shutdown_callback(_on_shutdown)
+    scheduler.start()
+
+    while not shutdown_event.is_set():
+        attempt += 1
+        model = ResilientRealtimeModel(
             model=GEMINI_LIVE_MODEL,
             instructions=formatted_instructions,
             api_key=gemini_key_manager.get_current_key(),
             **_realtime_voice_options(),
             realtime_input_config=fast_vad_config
-        ),
-        tools=ACTIVE_TOOLS
-    )
+        )
 
-    # NOTE on the tools list below: registering every tool on every session
-    # makes the Realtime API process a much bigger function-calling schema on
-    # every turn, which adds latency and makes the model more likely to pick
-    # the wrong tool. Set TOOL_MODE=full in .env only if you actively need the
-    # rarer tools (vision/workflow) in a given session.
+        session = AgentSession(
+            llm=model,
+            tools=ACTIVE_TOOLS
+        )
 
-    # Play startup sound BEFORE connecting to Gemini so no API deadlines are running
-    await play_startup_sound()
+        session_closed_event = asyncio.Event()
+        session_close_event_holder: list[CloseEvent | None] = [None]
 
-    await session.start(
-        room=ctx.room,
-        agent=Assistant(),
-        room_options=room_io.RoomOptions(
-            audio_input=room_io.AudioInputOptions(
-                noise_cancellation=lambda params: noise_cancellation.BVCTelephony() if params.participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP else noise_cancellation.BVC(),
-            ),
-        ),
-    )
+        @session.on("close")
+        def _on_session_close(event: CloseEvent):
+            session_close_event_holder[0] = event
+            session_closed_event.set()
 
-    reply_instructions = f"Current Context: {memory_context}\n\n{REPLY_PROMPT}"
-    await session.generate_reply(
-        instructions=reply_instructions
-    )
+        try:
+            # Ensure primary session on JobContext points to this fresh session
+            ctx._primary_agent_session = None
+
+            await session.start(
+                room=ctx.room,
+                agent=Assistant(),
+                room_options=room_io.RoomOptions(
+                    audio_input=room_io.AudioInputOptions(
+                        noise_cancellation=lambda params: noise_cancellation.BVCTelephony()
+                        if params.participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+                        else noise_cancellation.BVC(),
+                    ),
+                ),
+            )
+
+            # Update scheduler with the live session across restarts/reconnects
+            scheduler.set_active_session(session)
+
+            if simulate_crash and attempt < 3:
+                logging.warning(f"[SIMULATION] Simulating Realtime crash on attempt {attempt}")
+                raise APIConnectionError("Simulated Gemini Realtime APIConnectionError")
+
+            # Guarded startup greeting (attempt 1 only)
+            if attempt == 1:
+                await _guarded_startup_greeting(session, model, memory_context)
+                # Check for missed tasks while Cynthia/laptop was offline and notify user once
+                await scheduler.check_startup_missed_tasks(session)
+            else:
+                logging.info(f"✨ [SUPERVISOR] Reconnection attempt {attempt-1} succeeded! Assistant is back online.")
+
+            # Wait until either the session closes or the job is requested to shut down
+            done, pending = await asyncio.wait(
+                [
+                    asyncio.create_task(session_closed_event.wait(), name="session-closed-wait"),
+                    asyncio.create_task(shutdown_event.wait(), name="shutdown-wait"),
+                ],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for t in pending:
+                t.cancel()
+
+            if shutdown_event.is_set():
+                logging.info("Job shutdown requested (user exit or Ctrl+C). Exiting supervisor.")
+                break
+
+            close_ev = session_close_event_holder[0]
+            if close_ev and close_ev.reason != CloseReason.ERROR:
+                logging.info(f"AgentSession closed normally with reason: {close_ev.reason}. Exiting supervisor.")
+                break
+
+            error_details = close_ev.error if close_ev else "Unknown session closure"
+            logging.error(f"AgentSession closed due to unrecoverable error: {error_details}")
+
+        except asyncio.CancelledError:
+            logging.info("Supervisor received CancelledError (user shutdown). Exiting cleanly.")
+            break
+        except Exception as e:
+            logging.error(f"Session startup or execution error: {e}", exc_info=True)
+
+        try:
+            await session.aclose()
+        except Exception:
+            pass
+
+        if shutdown_event.is_set():
+            break
+
+        if attempt >= max_attempts:
+            msg = f"🚨 [SUPERVISOR] Maximum reconnection attempts ({max_attempts}) reached. Gemini Realtime connection could not be restored."
+            logging.error(msg)
+            print(f"\n{msg}\nPlease check your internet connection or Gemini API credentials.\n")
+            try:
+                await ctx.shutdown("max_reconnect_attempts_exceeded")
+            except Exception:
+                pass
+            break
+
+        delay = backoff * (2 ** (attempt - 1))  # 1s, 2s, 4s, 8s
+        logging.warning(f"[RECONNECT] attempt {attempt}/{max_attempts} failed. Retrying in {delay:.1f}s...")
+        try:
+            await asyncio.wait_for(shutdown_event.wait(), timeout=delay)
+            break  # Shutdown fired during backoff
+        except asyncio.TimeoutError:
+            pass  # Backoff finished, retry next attempt
 
 
 if __name__ == "__main__":

@@ -88,3 +88,5 @@ memory.json*.bak
 generated_websites/
 
 tests/test_audio_outputs/
+
+data/

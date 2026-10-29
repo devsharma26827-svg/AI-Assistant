@@ -109,7 +109,7 @@ def _analyze_image(image_bytes: bytes, prompt: str) -> str:
         fallback_models=VISION_FALLBACK_MODELS
     )
 
-async def _get_gemini_vision_response(full_prompt: str, custom_image=None) -> str:
+async def _get_gemini_vision_response(full_prompt: str, custom_image=None, timeout: float | None = None) -> str:
     """Internal helper to capture screen and send to Gemini Vision. Optional custom_image allows passing a cropped PIL Image."""
     if not _PIL_INSTALLED:
         return "❌ Error: Pillow library not installed. Cannot capture screen."
@@ -118,7 +118,7 @@ async def _get_gemini_vision_response(full_prompt: str, custom_image=None) -> st
     if not gemini_key_manager.has_valid_key():
         return "❌ Error: GEMINI_API_KEY not found in environment variables."
 
-    total_timeout = max(30.0, GEMINI_VISION_TIMEOUT * 2 + 5.0)
+    total_timeout = timeout if timeout is not None else max(30.0, GEMINI_VISION_TIMEOUT * 2 + 5.0)
 
     try:
         loop = asyncio.get_running_loop()
@@ -203,7 +203,7 @@ async def summarize_screen_state() -> str:
         "3. Are there any obvious pending actions (e.g., an unsent message, a blank form)?\n"
         "Instruction: Keep it structured and concise. No more than 3 bullet points."
     )
-    return await _get_gemini_vision_response(prompt)
+    return await _get_gemini_vision_response(prompt, timeout=12.0)
 
 
 @function_tool

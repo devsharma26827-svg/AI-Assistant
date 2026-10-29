@@ -46,6 +46,7 @@ graph TD
 
 The active runtime application is comprised of the root-level Python modules imported by `agent.py`:
 - `agent.py`: Master LiveKit Voice Agent entrypoint coordinating sessions, voice options, and tool registries.
+- `scheduler_tools.py`: Persistent task & reminder scheduler with atomic JSON storage, strict system-clock validation, missed task tracking, and serialized tool action execution.
 - `gemini_key_manager.py`: Key rotation, cooldown tracking, sanitized logging, and model fallback management.
 - `vision_tools.py`: Screen capture (`Pillow`), JPEG downscaling, and image analysis using `google-genai`.
 - `youtube_tools.py`: Fast, metadata-only video/song playback, video search, channel search, and background media playback controls via Windows GSMTC.
@@ -335,6 +336,20 @@ Cynthia includes 13 core and extended capability modules designed specifically f
 - Query active and detected threat history (`get_defender_threats`).
 - Read-only & non-destructive: never disables Defender or modifies system security policies.
 
+### 13. Persistent Task & Reminder Scheduler (`scheduler_tools.py` & `tool_serializer.py`)
+- **Strict Time Validation**: Cynthia never computes or guesses absolute timestamps in the prompt. Time offsets (`delay_minutes`) and clock times (`at_time`, 12h/24h) are validated and resolved by the Python runtime against the system clock (`parse_and_validate_time`).
+- **Atomic Persistence**: Stored in `data/scheduled_tasks.json` with temporary-write (`.tmp`) and `os.replace` semantics. Recovers automatically from corrupt files using `.bak` copies and purges entries older than 7 days.
+- **Grace Window & Missed Tasks**: Background loop evaluates pending tasks every second. Tasks firing within a 90-second grace window are executed. Tasks overdue beyond 90 seconds are marked `missed` and never executed blindly.
+- **Startup Missed & Interrupted Resolution**: On assistant startup, Cynthia checks for any tasks that expired while offline or were interrupted during an unexpected shutdown, delivering a single vocal notification and offering resolution (`resolve_missed_task`).
+- **Safe Serialized Execution & Reentrant Lock**: Action tasks execute strictly through the shared tool serializer lock (`ReentrantAsyncLock`) so they never interleave with real-time speech or user commands. Internal nested tool calls are task-reentrant and never self-deadlock.
+- **Lock-Acquire & Per-Tool Execution Timeouts**: Guards against hung processes: 120s lock-acquire timeout (`failed: busy`), 90s WhatsApp UI timeout, and 30s tool timeout (`failed: timeout`) with mandatory `finally` resource release.
+- **Spoken Announcements & Honest Confirmation**: Actions make a short, non-blocking announcement before executing and report truthful outcomes ("Bhej diya Boss." or honest failure reasons).
+- **Session Context Injection**: Once an action finishes, its result is automatically injected into the LiveKit chat history (`role="assistant"`), allowing Cynthia to accurately answer follow-up queries like *"kar diya?"*.
+- **Exact vs. Remind Modes**: Reminders support `mode="exact"` (delivering strictly and verbatim the requested text e.g. "Hello") and `mode="remind"` (natural Hinglish reminder delivery).
+- **24-Hour History**: `list_scheduled_tasks` returns all active pending tasks plus tasks executed or missed within the past 24 hours.
+- **Allowed Tools Whitelist**: `schedule_action` strictly allows safe, idempotent tools (`whatsapp_message`, `set_system_volume`, `youtube_play_video`, `youtube_pause_playback`, `youtube_resume_playback`, `mute_system_volume`). Destructive commands (shutdown, file deletion) are rejected at schedule time.
+- **Important Limitation**: Reminders and scheduled actions only trigger while Cynthia is actively running on the laptop; tasks overdue while offline are flagged as missed upon next launch.
+
 ---
 
 ### Voice Command Quick Reference
@@ -356,6 +371,12 @@ Cynthia includes 13 core and extended capability modules designed specifically f
 | **Email Compose** | *"Email draft karo"* / *"Email send karo"* | `draft_email`, `send_email` |
 | **Spotify Music** | *"Spotify par Kesariya chalao"* / *"Spotify pause karo"* | `spotify_play`, `spotify_playback_control` |
 | **Screen OCR** | *"Screen ka text read karo"* | `read_screen_text` |
+| **Current Time** | *"Abhi time kya hua hai?"* / *"Current time batao"* | `get_current_time` |
+| **Reminder** | *"5 min baad mujhe hello bolna"* / *"Pani peene ka reminder do"* | `schedule_reminder` |
+| **Scheduled Action** | *"4:55 pe WhatsApp pe Kushagar ko msg kar dena"*<br>*"10 min baad volume 40% kar dena"* | `schedule_action` |
+| **List Tasks** | *"Pending reminders dikhao"* / *"Scheduled tasks list karo"* | `list_scheduled_tasks` |
+| **Cancel Task** | *"Pani wala reminder cancel karo"* / *"Task id a1b2 cancel karo"* | `cancel_scheduled_task` |
+| **Resolve Missed** | *"Missed task run kar do"* / *"Purana task dismiss karo"* | `resolve_missed_task` |
 
 ---
 
@@ -372,6 +393,7 @@ Cynthia includes 13 core and extended capability modules designed specifically f
 | Website Builder | ✅ Yes (Local file generation) | None |
 | WhatsApp Automation | ✅ Yes (Desktop window automation) | Active WhatsApp application session |
 | Clipboard Reader | ✅ Yes (Local `pyperclip`) | None |
+| Task & Reminder Scheduler | ✅ Yes (Local storage & background timer) | LiveKit voice session for vocal delivery |
 | YouTube Playback & Controls | Background GSMTC is Local | Internet connection for video streams |
 | Spotify Integration | Web search fallback is local | Spotify Developer Client ID for Web API |
 | SMTP Email Automation | No | Configured SMTP server credentials in `.env.local` |
